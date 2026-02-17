@@ -43,17 +43,29 @@ const ensureApiKey = async (): Promise<boolean> => {
         try {
             const hasKey = await w.aistudio.hasSelectedApiKey();
             if (!hasKey) {
-                const success = await w.aistudio.openSelectKey();
+                console.log("AI Studio environment detected, but no key selected. Prompting user.");
+                const success = await w.aistudio.openSelectKey().catch((err: any) => {
+                    console.error("Error during openSelectKey:", err);
+                    return false;
+                });
                 return success;
             }
             return true;
         } catch (e) {
-            console.error("AI Studio Key Check Failed", e);
-            return false;
+            console.error("An error occurred while checking for AI Studio API key:", e);
         }
     }
-    // If not in AI Studio environment, we assume API_KEY is set via env vars or other means
-    return !!process.env.API_KEY; 
+    
+    // Fallback for local development
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
+        console.warn("VITE_GEMINI_API_KEY is not set in the .env file.");
+        // We don't alert here anymore to avoid being intrusive, 
+        // but we'll return false. The calling function can decide how to notify the user.
+        return false;
+    }
+    
+    return true;
 };
 
 const App: React.FC = () => {
@@ -73,6 +85,13 @@ const App: React.FC = () => {
   const [userAge, setUserAge] = useState<number | null>(null);
   const [sceneCount, setSceneCount] = useState<number>(4); // Default 4
   const [isMovieMode, setIsMovieMode] = useState(false);
+  const isMovieModeRef = useRef(isMovieMode); // Ref to hold latest movie mode state
+
+  // Sync ref with state
+  useEffect(() => {
+      isMovieModeRef.current = isMovieMode;
+  }, [isMovieMode]);
+
   const [lastStoryContext, setLastStoryContext] = useState<string | null>(null);
   
   const [isPro, setIsPro] = useState(false); 
@@ -178,8 +197,12 @@ const App: React.FC = () => {
   };
 
   const handleStartFlow = async () => {
-      // Ensure API Key is selected before starting the flow (especially for Live API in Brainstorm)
-      await ensureApiKey();
+      // Ensure API Key is selected before starting the flow
+      const hasApiKey = await ensureApiKey();
+      if (!hasApiKey) {
+          setErrorMessage("ToonCraft requires an API key to work. Please set it in your .env file or select one in the AI Studio environment.");
+          return;
+      }
 
       if (userAge) {
           if (userAge >= 10) {
@@ -241,19 +264,25 @@ const App: React.FC = () => {
     setErrorMessage(null);
     
     // Ensure Key is Valid before production
-    await ensureApiKey();
+    const hasApiKey = await ensureApiKey();
+    if (!hasApiKey) {
+        setErrorMessage("Production cannot start without an API key. Please configure your key.");
+        setAppState(AppState.HOME); // Go back home
+        return;
+    }
 
     try {
       if (signal.aborted) return;
 
       // 1. Scripting
       setProgress({ status: 'scripting', currentScene: 0, totalScenes: 0, message: 'Writing the screenplay...' });
-      const generatedScript = await generateScript(storyContext, userAge, isMovieMode, sceneCount, signal);
+      const currentMovieMode = isMovieModeRef.current;
+      const generatedScript = await generateScript(storyContext, userAge, currentMovieMode, sceneCount, signal);
       
       if (signal.aborted) return;
 
       generatedScript.targetAge = userAge;
-      generatedScript.isMovieMode = isMovieMode;
+      generatedScript.isMovieMode = currentMovieMode;
       const total = generatedScript.scenes.length;
       setScript(generatedScript);
 
@@ -285,7 +314,7 @@ const App: React.FC = () => {
           return img;
       };
 
-      if (isMovieMode) {
+      if (currentMovieMode) {
           // --- VEO 3 SYSTEM (Sequential, Mixed Media) ---
           const hasAccess = checkVeoAccess();
           if (hasAccess) decrementVeoTrial();

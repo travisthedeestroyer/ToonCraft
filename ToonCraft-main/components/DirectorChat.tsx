@@ -166,10 +166,15 @@ export const DirectorChat: React.FC<DirectorChatProps> = ({
       
       try {
         if (!audioContextRef.current) {
-             const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-             audioContextRef.current = ctx;
+             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+             audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
         }
         if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
+
+        // Check if context was successfully created
+        if (!audioContextRef.current) {
+            throw new Error("Could not create AudioContext");
+        }
 
         analyserRef.current = audioContextRef.current.createAnalyser();
         analyserRef.current.fftSize = 256;

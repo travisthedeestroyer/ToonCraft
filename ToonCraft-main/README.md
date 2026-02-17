@@ -12,9 +12,13 @@ View your app in AI Studio: https://ai.studio/apps/drive/1d8yKLmdDsvkgbBkRQn_N7A
 
 **Prerequisites:**  Node.js
 
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1.  **Install dependencies:**
+    `npm install`
+2.  **Set up Environment Variables:**
+    Create a `.env` file in the root of the project and add your API keys:
+    ```
+    VITE_GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
+    VITE_HUGGINGFACE_API_KEY="YOUR_HUGGINGFACE_API_KEY"
+    ```
+3.  **Run the app:**
+    `npm run dev`

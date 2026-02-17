@@ -2,12 +2,8 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Message, Script, AspectRatio, ImageSize } from "../types";
 import { GET_SYSTEM_INSTRUCTION_BRAINSTORM, GET_SYSTEM_INSTRUCTION_SCRIPT } from "../constants";
-import { pcmToWav } from "../utils/audio";
 
 // --- CONFIGURATION ---
-
-// Fallback key provided by user for reliable operation
-const DEFAULT_HF_TOKEN = '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';
 
 const MODEL_CONFIG = {
     // Scripts: Try standard flash, then new flash, then pro
@@ -42,11 +38,14 @@ const MODEL_CONFIG = {
 
 // Clients
 export const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) {
-      console.warn("API_KEY is missing from environment. Ensure the user selects a key via window.aistudio.");
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
+      console.warn("VITE_GEMINI_API_KEY is missing from environment. Ensure the user selects a key via window.aistudio or sets it in the .env file.");
+      // Fallback to an empty string to avoid breaking the GoogleGenAI constructor,
+      // relying on the aistudio environment to provide the key.
+      return new GoogleGenAI({ apiKey: '' });
   }
-  return new GoogleGenAI({ apiKey: apiKey || '' });
+  return new GoogleGenAI({ apiKey: apiKey });
 };
 
 export const getLiveClient = getAiClient;
@@ -295,8 +294,10 @@ export const generateSceneImage = async (prompt: string, age: number, previousIm
  */
 const generateHuggingFaceVideo = async (modelId: string, imageBase64: string, prompt: string, signal?: AbortSignal): Promise<string> => {
     // Priority: Environment Variable -> User Provided Fallback
-    const hfToken = process.env.HUGGINGFACE_API_KEY || DEFAULT_HF_TOKEN;
-    if (!hfToken) throw new Error("HUGGINGFACE_API_KEY not configured.");
+    const hfToken = import.meta.env.VITE_HUGGINGFACE_API_KEY;
+    if (!hfToken || hfToken === "YOUR_HUGGINGFACE_API_KEY") {
+        throw new Error("VITE_HUGGINGFACE_API_KEY not configured in .env file.");
+    }
 
     const url = `https://api-inference.huggingface.co/models/${modelId}`;
     
@@ -413,7 +414,7 @@ export const generateVeoVideo = async (prompt: string, imageBase64: string, sign
         if (!downloadLink) throw new Error("No video URI returned");
     
         const url = new URL(downloadLink);
-        if (!url.searchParams.has('key')) url.searchParams.set('key', process.env.API_KEY || '');
+        if (!url.searchParams.has('key')) url.searchParams.set('key', import.meta.env.VITE_GEMINI_API_KEY || '');
         
         const fetchResponse = await fetch(url.toString(), { signal });
         if (!fetchResponse.ok) throw new Error(`Download failed: ${fetchResponse.status}`);
@@ -441,7 +442,7 @@ export const generateVeoVideo = async (prompt: string, imageBase64: string, sign
  * Fallback Speech-to-Text using OpenAI Whisper via HF.
  */
 export const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
-    const hfToken = process.env.HUGGINGFACE_API_KEY || DEFAULT_HF_TOKEN;
+    const hfToken = import.meta.env.VITE_HUGGINGFACE_API_KEY;
     const model = MODEL_CONFIG.stt;
     
     try {
