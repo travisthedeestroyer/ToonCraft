@@ -8,10 +8,10 @@ import { CinemaPlayer } from './components/CinemaPlayer';
 import { Shop } from './components/Shop';
 import { NotesDemo } from './components/NotesDemo';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo } from './services/geminiService';
-import { saveProjectToDB, getProjectsFromDB, getUserProfile, updateUserProfile } from './utils/storage';
+import { saveProjectToDB, getProjectsFromDB, getUserProfile, updateUserProfile, getUserId } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
-import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { stripePromise } from './utils/stripe';
 
 const createPlaceholder = (text: string): string => {
     const canvas = document.createElement('canvas');
@@ -71,9 +71,6 @@ const ensureApiKey = async (): Promise<boolean> => {
     return true;
 };
 
-// You would typically store this key in an environment variable
-const stripePromise = loadStripe('pk_live_51Sfrqc3XTCcnH63RCmQifokEebwRsdI86jVyAIp5RG0Gbaema38cWJds7pkMGeoKmuzQhDL1QhJMtofin44gUMbG00G3zJ6A6l');
-
 const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
   const stripe = useStripe();
   const elements = useElements();
@@ -122,7 +119,7 @@ const App: React.FC = () => {
           fetch('https://wikasnaviedqazunhrdi.supabase.co/functions/v1/payment-sheet', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: getUserProfile().user_id })
+              body: JSON.stringify({ userId: getUserId() })
           })
           .then(res => res.json())
           .then(data => setClientSecret(data.clientSecret));
