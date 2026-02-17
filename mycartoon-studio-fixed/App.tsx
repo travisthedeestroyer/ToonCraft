@@ -371,6 +371,13 @@ const App: React.FC = () => {
       if (currentMovieMode) {
           // --- VEO 3 SYSTEM (Sequential, Mixed Media) ---
           const hasAccess = checkVeoAccess();
+          if (!hasAccess) {
+              // If no access, stop the production process immediately.
+              // The checkVeoAccess function already triggered the modal.
+              setAppState(AppState.BRAINSTORM); // or AppState.HOME
+              return;
+          }
+          
           if (hasAccess) decrementVeoTrial();
 
           for (let i = 0; i < total; i++) {
