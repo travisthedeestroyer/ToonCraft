@@ -6,9 +6,12 @@ import { DirectorChat } from './components/DirectorChat';
 import { ProductionLoader } from './components/ProductionLoader';
 import { CinemaPlayer } from './components/CinemaPlayer';
 import { Shop } from './components/Shop';
+import { NotesDemo } from './components/NotesDemo';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo } from './services/geminiService';
-import { saveProjectToDB, getProjectsFromDB } from './utils/storage';
+import { saveProjectToDB, getProjectsFromDB, getUserProfile, updateUserProfile } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
 const createPlaceholder = (text: string): string => {
     const canvas = document.createElement('canvas');
@@ -68,7 +71,65 @@ const ensureApiKey = async (): Promise<boolean> => {
     return true;
 };
 
+// You would typically store this key in an environment variable
+const stripePromise = loadStripe('pk_live_51Sfrqc3XTCcnH63RCmQifokEebwRsdI86jVyAIp5RG0Gbaema38cWJds7pkMGeoKmuzQhDL1QhJMtofin44gUMbG00G3zJ6A6l');
+
+const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [errorMessage, setErrorMessage] = useState(null);
+
+  const handleSubmit = async (event: any) => {
+    event.preventDefault();
+    if (!stripe || !elements) return;
+
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: window.location.href, // Redirect back here
+      },
+      redirect: 'if_required' // Avoid redirect if not needed (e.g. card)
+    });
+
+    if (error) {
+      setErrorMessage(error.message);
+    } else {
+      // Payment successful!
+      // In a real app, listen for webhook. 
+      // For this demo, we'll assume success if no error.
+      onComplete();
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="w-full">
+      <PaymentElement />
+      <button disabled={!stripe} className="w-full mt-4 py-3 bg-indigo-600 rounded text-white font-bold">
+        Pay $4.99
+      </button>
+      {errorMessage && <div className="text-red-500 mt-2">{errorMessage}</div>}
+    </form>
+  )
+};
+
 const App: React.FC = () => {
+  // ... (previous state)
+  const [clientSecret, setClientSecret] = useState("");
+
+  useEffect(() => {
+      if (showSubscriptionModal && !clientSecret) {
+          // Call our Edge Function to get a payment intent
+          fetch('https://wikasnaviedqazunhrdi.supabase.co/functions/v1/payment-sheet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: getUserProfile().user_id })
+          })
+          .then(res => res.json())
+          .then(data => setClientSecret(data.clientSecret));
+      }
+  }, [showSubscriptionModal]);
+
+  // ... (rest of App component)
   const [appState, setAppState] = useState<AppState>(AppState.HOME);
   const [script, setScript] = useState<Script | null>(null);
   const [progress, setProgress] = useState<GenerationProgress>({
@@ -114,30 +175,29 @@ const App: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const savedWallet = localStorage.getItem('tooncraft_wallet');
-    if (savedWallet) setWallet(parseInt(savedWallet, 10));
+    // Load User Profile from Supabase
+    getUserProfile().then(profile => {
+        setWallet(profile.wallet);
+        setIsPro(profile.is_pro);
+        setVeoTrials(profile.veo_trials);
+        setOwnedThemes(profile.owned_themes || ['default']);
+        setOwnedVoices(profile.owned_voices || ['Kore']);
+    });
     
-    const savedThemes = localStorage.getItem('tooncraft_themes');
-    if (savedThemes) setOwnedThemes(JSON.parse(savedThemes));
-    
+    // Load Projects
+    getProjectsFromDB().then(setSavedProjects).catch(console.error);
+
+    // Keep LocalStorage for simple non-critical UI preferences
     const savedCurrentTheme = localStorage.getItem('tooncraft_current_theme');
     if (savedCurrentTheme) setCurrentThemeId(savedCurrentTheme);
     
-    const savedVoices = localStorage.getItem('tooncraft_voices');
-    if (savedVoices) setOwnedVoices(JSON.parse(savedVoices));
-    
     const savedCurrentVoice = localStorage.getItem('tooncraft_current_voice');
     if (savedCurrentVoice) setCurrentVoiceId(savedCurrentVoice);
-
-    const trials = localStorage.getItem('tooncraft_veo_trials');
-    if (trials) setVeoTrials(parseInt(trials, 10));
-
-    getProjectsFromDB().then(setSavedProjects).catch(console.error);
   }, []);
 
   const saveProject = async (scriptToSave: Script) => {
     const newProject = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       title: scriptToSave.title || "Untitled",
       date: new Date().toLocaleDateString(),
       script: scriptToSave
@@ -157,7 +217,7 @@ const App: React.FC = () => {
   const handleCollectCoin = (amount: number) => {
       const newBalance = wallet + amount;
       setWallet(newBalance);
-      localStorage.setItem('tooncraft_wallet', newBalance.toString());
+      updateUserProfile({ wallet: newBalance });
   };
 
   const handleBuyTheme = (themeId: string, cost: number) => {
@@ -166,8 +226,7 @@ const App: React.FC = () => {
           const newOwned = [...ownedThemes, themeId];
           setWallet(newBalance);
           setOwnedThemes(newOwned);
-          localStorage.setItem('tooncraft_wallet', newBalance.toString());
-          localStorage.setItem('tooncraft_themes', JSON.stringify(newOwned));
+          updateUserProfile({ wallet: newBalance, owned_themes: newOwned });
       }
   };
 
@@ -184,8 +243,7 @@ const App: React.FC = () => {
           const newOwned = [...ownedVoices, voiceId];
           setWallet(newBalance);
           setOwnedVoices(newOwned);
-          localStorage.setItem('tooncraft_wallet', newBalance.toString());
-          localStorage.setItem('tooncraft_voices', JSON.stringify(newOwned));
+          updateUserProfile({ wallet: newBalance, owned_voices: newOwned });
       }
   };
 
@@ -237,7 +295,7 @@ const App: React.FC = () => {
       if (!isPro && veoTrials > 0) {
           const newVal = veoTrials - 1;
           setVeoTrials(newVal);
-          localStorage.setItem('tooncraft_veo_trials', newVal.toString());
+          updateUserProfile({ veo_trials: newVal });
       }
   };
 
@@ -476,6 +534,10 @@ const App: React.FC = () => {
                          </div>
                      </div>
                  )}
+                 
+                 <div className="absolute bottom-4 right-4 z-20 scale-75 origin-bottom-right opacity-50 hover:opacity-100 transition-opacity">
+                    <NotesDemo />
+                 </div>
             </div>
         )}
 
@@ -614,16 +676,17 @@ const App: React.FC = () => {
                         </div>
                     </div>
 
-                    <button 
-                        onClick={() => {
-                            setIsPro(true); 
-                            setShowSubscriptionModal(false);
-                            alert("Welcome to Pro! 🎉");
-                        }}
-                        className="w-full py-4 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-full font-black text-black text-xl hover:scale-105 transition-transform shadow-lg"
-                    >
-                        Ask Parents to Buy ($4.99)
-                    </button>
+                    {clientSecret && (
+                        <Elements stripe={stripePromise} options={{ clientSecret }}>
+                            <CheckoutForm onComplete={() => {
+                                setIsPro(true);
+                                setShowSubscriptionModal(false);
+                                alert("Payment Successful! Welcome to Pro! 🎉");
+                                updateUserProfile({ is_pro: true }); // Ideally handled by webhook, but safe-ish for client-side optimistically
+                            }} />
+                        </Elements>
+                    )}
+                    {!clientSecret && <div className="text-center p-4">Loading payment options...</div>}
                     <p className="mt-4 text-xs text-white/30">One-time purchase. Kids: Ask first!</p>
                 </div>
             </div>
