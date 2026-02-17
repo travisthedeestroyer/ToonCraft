@@ -25,5 +25,9 @@ export default defineConfig({
                 fallbackCJS: true
             }
         }
+      },
+      build: {
+        minify: false,
+        sourcemap: true
       }
     });

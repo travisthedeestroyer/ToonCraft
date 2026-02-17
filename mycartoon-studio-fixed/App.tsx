@@ -6,7 +6,6 @@ import { DirectorChat } from './components/DirectorChat';
 import { ProductionLoader } from './components/ProductionLoader';
 import { CinemaPlayer } from './components/CinemaPlayer';
 import { Shop } from './components/Shop';
-import { NotesDemo } from './components/NotesDemo';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo } from './services/geminiService';
 import { saveProjectToDB, getProjectsFromDB, getUserProfile, updateUserProfile, getUserId } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
@@ -113,19 +112,6 @@ const App: React.FC = () => {
   // ... (previous state)
   const [clientSecret, setClientSecret] = useState("");
 
-  useEffect(() => {
-      if (showSubscriptionModal && !clientSecret) {
-          // Call our Edge Function to get a payment intent
-          fetch('https://wikasnaviedqazunhrdi.supabase.co/functions/v1/payment-sheet', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: getUserId() })
-          })
-          .then(res => res.json())
-          .then(data => setClientSecret(data.clientSecret));
-      }
-  }, [showSubscriptionModal]);
-
   // ... (rest of App component)
   const [appState, setAppState] = useState<AppState>(AppState.HOME);
   const [script, setScript] = useState<Script | null>(null);
@@ -170,6 +156,19 @@ const App: React.FC = () => {
 
   // Abort Controller for cancelling production
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+      if (showSubscriptionModal && !clientSecret) {
+          // Call our Edge Function to get a payment intent
+          fetch('https://wikasnaviedqazunhrdi.supabase.co/functions/v1/payment-sheet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: getUserId() })
+          })
+          .then(res => res.json())
+          .then(data => setClientSecret(data.clientSecret));
+      }
+  }, [showSubscriptionModal]);
 
   useEffect(() => {
     // Load User Profile from Supabase
@@ -531,10 +530,6 @@ const App: React.FC = () => {
                          </div>
                      </div>
                  )}
-                 
-                 <div className="absolute bottom-4 right-4 z-20 scale-75 origin-bottom-right opacity-50 hover:opacity-100 transition-opacity">
-                    <NotesDemo />
-                 </div>
             </div>
         )}
 
