@@ -1,697 +1,257 @@
+import React, { useState, useEffect } from 'react';
+import { motion, useReducedMotion, easeInOut } from 'framer-motion';
+import { Sparkles, Video, Crown, Mail, Calendar, PartyPopper } from 'lucide-react';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { AppState, Script, GenerationProgress } from './types';
-import { THEMES } from './constants';
-import { DirectorChat } from './components/DirectorChat';
-import { ProductionLoader } from './components/ProductionLoader';
-import { CinemaPlayer } from './components/CinemaPlayer';
-import { Shop } from './components/Shop';
-import { generateScript, generateSceneImage, generateNarration, generateVeoVideo } from './services/geminiService';
-import { saveProjectToDB, getProjectsFromDB, getUserProfile, updateUserProfile, getUserId } from './utils/storage';
-import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
-import { stripePromise } from './utils/stripe';
+// ---------- Reusable Components ----------
 
-const createPlaceholder = (text: string): string => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1280;
-    canvas.height = 720;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-        ctx.fillStyle = '#1e1e2e';
-        ctx.fillRect(0, 0, 1280, 720);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 40px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, 640, 360);
-    }
-    return canvas.toDataURL('image/jpeg').split(',')[1];
-};
-
-// Utility for delays
-const wait = (ms: number, signal?: AbortSignal) => new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error("Aborted"));
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => {
-        clearTimeout(timer);
-        reject(new Error("Aborted"));
-    });
-});
-
-// --- API KEY CHECKER FOR STUDIO ENVIRONMENT ---
-const ensureApiKey = async (): Promise<boolean> => {
-    const w = window as any;
-    if (w.aistudio) {
-        try {
-            const hasKey = await w.aistudio.hasSelectedApiKey();
-            if (!hasKey) {
-                console.log("AI Studio environment detected, but no key selected. Prompting user.");
-                const success = await w.aistudio.openSelectKey().catch((err: any) => {
-                    console.error("Error during openSelectKey:", err);
-                    return false;
-                });
-                return success;
-            }
-            return true;
-        } catch (e) {
-            console.error("An error occurred while checking for AI Studio API key:", e);
-        }
-    }
-    
-    // Fallback for local development
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
-        console.warn("VITE_GEMINI_API_KEY is not set in the .env file.");
-        // We don't alert here anymore to avoid being intrusive, 
-        // but we'll return false. The calling function can decide how to notify the user.
-        return false;
-    }
-    
-    return true;
-};
-
-const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [errorMessage, setErrorMessage] = useState(null);
-
-  const handleSubmit = async (event: any) => {
-    event.preventDefault();
-    if (!stripe || !elements) return;
-
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: window.location.href, // Redirect back here
-      },
-      redirect: 'if_required' // Avoid redirect if not needed (e.g. card)
-    });
-
-    if (error) {
-      setErrorMessage(error.message);
-    } else {
-      // Payment successful!
-      // In a real app, listen for webhook. 
-      // For this demo, we'll assume success if no error.
-      onComplete();
-    }
+const FloatingOrbs = () => {
+  const shouldReduceMotion = useReducedMotion();
+  const orbAnimation = shouldReduceMotion ? {} : {
+    y: [0, -20, 0],
+    transition: { duration: 6, repeat: Infinity, ease: easeInOut }
   };
 
+  const orbs = [
+    { color: 'bg-yellow-400', size: 'w-32 h-32', position: 'top-20 left-20', blur: 'blur-xl', delay: 0 },
+    { color: 'bg-blue-400', size: 'w-40 h-40', position: 'bottom-20 right-20', blur: 'blur-xl', delay: 0.3 },
+    { color: 'bg-pink-400', size: 'w-24 h-24', position: 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2', blur: 'blur-xl', delay: 0.6 },
+    { color: 'bg-cyan-400', size: 'w-16 h-16', position: 'top-10 right-10', blur: 'blur-lg', delay: 0.9 },
+    { color: 'bg-orange-400', size: 'w-20 h-20', position: 'bottom-10 left-10', blur: 'blur-lg', delay: 1.2 },
+    { color: 'bg-green-400', size: 'w-12 h-12', position: 'top-1/3 right-1/4', blur: 'blur-md', delay: 1.5 },
+  ];
+
   return (
-    <form onSubmit={handleSubmit} className="w-full">
-      <PaymentElement />
-      <button disabled={!stripe} className="w-full mt-4 py-3 bg-indigo-600 rounded text-white font-bold">
-        Pay $4.99
-      </button>
-      {errorMessage && <div className="text-red-500 mt-2">{errorMessage}</div>}
-    </form>
-  )
+    <div className="absolute inset-0 pointer-events-none">
+      {orbs.map((orb, i) => (
+        <motion.div
+          key={i}
+          className={`absolute ${orb.position} ${orb.size} ${orb.color} rounded-full ${orb.blur} opacity-30`}
+          animate={orbAnimation}
+          transition={{ delay: orb.delay }}
+        />
+      ))}
+    </div>
+  );
 };
 
-const App: React.FC = () => {
-  // ... (previous state)
-  const [clientSecret, setClientSecret] = useState("");
+const AnimatedIconButton = ({ icon: Icon, gradient, delay = 0 }: { icon: any; gradient: string; delay?: number }) => (
+  <motion.div
+    className={`w-20 h-20 bg-gradient-to-r ${gradient} rounded-full flex items-center justify-center shadow-2xl cursor-pointer`}
+    whileHover={{ scale: 1.1 }}
+    whileTap={{ scale: 0.95 }}
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ delay, type: "spring" as const, stiffness: 300 }}
+  >
+    <Icon size={40} className="text-white" />
+  </motion.div>
+);
 
-  // ... (rest of App component)
-  const [appState, setAppState] = useState<AppState>(AppState.HOME);
-  const [script, setScript] = useState<Script | null>(null);
-  const [progress, setProgress] = useState<GenerationProgress>({
-    status: 'scripting',
-    currentScene: 0,
-    totalScenes: 0,
-    message: ''
-  });
-  const [savedProjects, setSavedProjects] = useState<{id: string, title: string, date: string, script: Script}[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
-  
-  // Settings
-  const [userAge, setUserAge] = useState<number | null>(null);
-  const [sceneCount, setSceneCount] = useState<number>(4); // Default 4
-  const [isMovieMode, setIsMovieMode] = useState(false);
-  const isMovieModeRef = useRef(isMovieMode); // Ref to hold latest movie mode state
+const CountdownTimer = ({ targetDate }: { targetDate: string | Date }) => {
+  const [timeLeft, setTimeLeft] = useState(calculateTimeLeft());
 
-  // Sync ref with state
-  useEffect(() => {
-      isMovieModeRef.current = isMovieMode;
-  }, [isMovieMode]);
-
-  const [lastStoryContext, setLastStoryContext] = useState<string | null>(null);
-  
-  const [isPro, setIsPro] = useState(false); 
-  const [veoTrials, setVeoTrials] = useState(3);
-
-  // Economy & Shop State
-  const [wallet, setWallet] = useState(0);
-  
-  // Themes
-  const [currentThemeId, setCurrentThemeId] = useState('default');
-  const [ownedThemes, setOwnedThemes] = useState<string[]>(['default']);
-  
-  // Voices
-  const [currentVoiceId, setCurrentVoiceId] = useState('Kore');
-  const [ownedVoices, setOwnedVoices] = useState<string[]>(['Kore']);
-
-  const currentTheme = THEMES.find(t => t.id === currentThemeId) || THEMES[0];
-
-  // Abort Controller for cancelling production
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-      if (showSubscriptionModal && !clientSecret) {
-          // Call our Edge Function to get a payment intent
-          fetch('https://wikasnaviedqazunhrdi.supabase.co/functions/v1/payment-sheet', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: getUserId() })
-          })
-          .then(res => res.json())
-          .then(data => setClientSecret(data.clientSecret));
-      }
-  }, [showSubscriptionModal]);
-
-  useEffect(() => {
-    // Load User Profile from Supabase
-    getUserProfile().then(profile => {
-        setWallet(profile.wallet);
-        setIsPro(profile.is_pro);
-        setVeoTrials(profile.veo_trials);
-        setOwnedThemes(profile.owned_themes || ['default']);
-        setOwnedVoices(profile.owned_voices || ['Kore']);
-    });
-    
-    // Load Projects
-    getProjectsFromDB().then(setSavedProjects).catch(console.error);
-
-    // Keep LocalStorage for simple non-critical UI preferences
-    const savedCurrentTheme = localStorage.getItem('tooncraft_current_theme');
-    if (savedCurrentTheme) setCurrentThemeId(savedCurrentTheme);
-    
-    const savedCurrentVoice = localStorage.getItem('tooncraft_current_voice');
-    if (savedCurrentVoice) setCurrentVoiceId(savedCurrentVoice);
-  }, []);
-
-  const saveProject = async (scriptToSave: Script) => {
-    const newProject = {
-      id: crypto.randomUUID(),
-      title: scriptToSave.title || "Untitled",
-      date: new Date().toLocaleDateString(),
-      script: scriptToSave
+  function calculateTimeLeft() {
+    const difference = +new Date(targetDate) - +new Date();
+    if (difference <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
+    return {
+      days: Math.floor(difference / (1000 * 60 * 60 * 24)),
+      hours: Math.floor((difference / (1000 * 60 * 60)) % 24),
+      minutes: Math.floor((difference / 1000 / 60) % 60),
+      seconds: Math.floor((difference / 1000) % 60),
     };
+  }
 
-    try {
-        await saveProjectToDB(newProject);
-        const updated = await getProjectsFromDB();
-        setSavedProjects(updated);
-        alert("Project saved successfully!");
-    } catch (e: any) {
-        console.error("Save failed", e?.message || "Unknown error");
-        setErrorMessage("Could not save project to database.");
+  useEffect(() => {
+    const timer = setInterval(() => setTimeLeft(calculateTimeLeft()), 1000);
+    return () => clearInterval(timer);
+  }, [targetDate]);
+
+  const timeUnits = [
+    { label: 'Days', value: timeLeft.days },
+    { label: 'Hours', value: timeLeft.hours },
+    { label: 'Minutes', value: timeLeft.minutes },
+    { label: 'Seconds', value: timeLeft.seconds },
+  ];
+
+  return (
+    <div className="flex justify-center space-x-4 md:space-x-8">
+      {timeUnits.map((unit) => (
+        <div key={unit.label} className="text-center">
+          <div className="text-4xl md:text-6xl font-black bg-white/10 backdrop-blur-sm rounded-2xl px-4 py-2 border border-white/20 shadow-lg">
+            {String(unit.value).padStart(2, '0')}
+          </div>
+          <div className="text-sm md:text-base uppercase tracking-wider mt-2 text-white/70">
+            {unit.label}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const NewsletterForm = () => {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState('idle'); // idle, loading, success, error
+  const [message, setMessage] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+      setStatus('error');
+      setMessage('Please enter a valid email address.');
+      return;
     }
-  };
-
-  const handleCollectCoin = (amount: number) => {
-      const newBalance = wallet + amount;
-      setWallet(newBalance);
-      updateUserProfile({ wallet: newBalance });
-  };
-
-  const handleBuyTheme = (themeId: string, cost: number) => {
-      if (wallet >= cost && !ownedThemes.includes(themeId)) {
-          const newBalance = wallet - cost;
-          const newOwned = [...ownedThemes, themeId];
-          setWallet(newBalance);
-          setOwnedThemes(newOwned);
-          updateUserProfile({ wallet: newBalance, owned_themes: newOwned });
-      }
-  };
-
-  const handleSelectTheme = (themeId: string) => {
-      if (ownedThemes.includes(themeId)) {
-          setCurrentThemeId(themeId);
-          localStorage.setItem('tooncraft_current_theme', themeId);
-      }
-  };
-
-  const handleBuyVoice = (voiceId: string, cost: number) => {
-      if (wallet >= cost && !ownedVoices.includes(voiceId)) {
-          const newBalance = wallet - cost;
-          const newOwned = [...ownedVoices, voiceId];
-          setWallet(newBalance);
-          setOwnedVoices(newOwned);
-          updateUserProfile({ wallet: newBalance, owned_voices: newOwned });
-      }
-  };
-
-  const handleSelectVoice = (voiceId: string) => {
-      if (ownedVoices.includes(voiceId)) {
-          setCurrentVoiceId(voiceId);
-          localStorage.setItem('tooncraft_current_voice', voiceId);
-      }
-  };
-
-  const handleStartFlow = async () => {
-      // Ensure API Key is selected before starting the flow
-      const hasApiKey = await ensureApiKey();
-      if (!hasApiKey) {
-          setErrorMessage("ToonCraft requires an API key to work. Please set it in your .env file or select one in the AI Studio environment.");
-          return;
-      }
-
-      if (userAge) {
-          if (userAge >= 10) {
-            setAppState(AppState.SCENE_SELECTION);
-          } else {
-            setAppState(AppState.BRAINSTORM);
-          }
-      } else {
-          setAppState(AppState.AGE_INPUT);
-      }
-      setErrorMessage(null);
-  };
-
-  const handleAgeSelect = (age: number) => {
-      setUserAge(age);
-      if (age < 10) {
-          setSceneCount(4);
-          setAppState(AppState.BRAINSTORM);
-      } else {
-          setAppState(AppState.SCENE_SELECTION);
-      }
-  };
-
-  const checkVeoAccess = (): boolean => {
-    if (isPro) return true;
-    if (veoTrials > 0) return true;
-    setShowSubscriptionModal(true);
-    return false;
-  };
-
-  const decrementVeoTrial = () => {
-      if (!isPro && veoTrials > 0) {
-          const newVal = veoTrials - 1;
-          setVeoTrials(newVal);
-          updateUserProfile({ veo_trials: newVal });
-      }
-  };
-
-  const handleCancelProduction = () => {
-      if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-          abortControllerRef.current = null;
-      }
-      setAppState(AppState.HOME);
-      setScript(null);
-      setErrorMessage(null);
-  };
-
-  const handleStoryReady = async (storyContext: string) => {
-    if (!userAge) return;
-    
-    // Reset Cancel Signal
-    if (abortControllerRef.current) abortControllerRef.current.abort();
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
-
-    setLastStoryContext(storyContext);
-    setAppState(AppState.PRODUCING);
-    setErrorMessage(null);
-    
-    // Ensure Key is Valid before production
-    const hasApiKey = await ensureApiKey();
-    if (!hasApiKey) {
-        setErrorMessage("Production cannot start without an API key. Please configure your key.");
-        setAppState(AppState.HOME); // Go back home
-        return;
-    }
-
-    try {
-      if (signal.aborted) return;
-
-      // 1. Scripting
-      setProgress({ status: 'scripting', currentScene: 0, totalScenes: 0, message: 'Writing the screenplay...' });
-      const currentMovieMode = isMovieModeRef.current;
-      const generatedScript = await generateScript(storyContext, userAge, currentMovieMode, sceneCount, signal);
-      
-      if (signal.aborted) return;
-
-      generatedScript.targetAge = userAge;
-      generatedScript.isMovieMode = currentMovieMode;
-      const total = generatedScript.scenes.length;
-      setScript(generatedScript);
-
-      // 2. Audio (Common to both modes)
-      setProgress({ status: 'audio', currentScene: 0, totalScenes: total, message: 'Casting voice actors...' });
-      // Sequential audio generation to avoid rate limits
-      for (let i = 0; i < total; i++) {
-        if (signal.aborted) return;
-        try {
-            const audio = await generateNarration(generatedScript.scenes[i].narrative, userAge, signal);
-            generatedScript.scenes[i].audioUrl = audio;
-            await wait(200, signal); // Small delay
-        } catch (e) {
-            if (signal.aborted) return;
-            console.warn(`Audio failed for scene ${i}`, e);
-        }
-      }
-
-      // 3. Visuals - DISTINCT SYSTEMS
-      // We process strictly sequentially now to prevent 429 errors
-      
-      let referenceImage: string | undefined = undefined;
-
-      // HELPER: Generates the base image (NanoBanana)
-      const generateBaseImage = async (index: number, refImg?: string) => {
-          const scene = generatedScript.scenes[index];
-          const img = await generateSceneImage(scene.visualDescription, userAge, refImg, false, signal);
-          generatedScript.scenes[index].imageUrl = img;
-          return img;
-      };
-
-      if (currentMovieMode) {
-          // --- VEO 3 SYSTEM (Sequential, Mixed Media) ---
-          const hasAccess = checkVeoAccess();
-          if (!hasAccess) {
-              // If no access, stop the production process immediately.
-              // The checkVeoAccess function already triggered the modal.
-              setAppState(AppState.BRAINSTORM); // or AppState.HOME
-              return;
-          }
-          
-          if (hasAccess) decrementVeoTrial();
-
-          for (let i = 0; i < total; i++) {
-              if (signal.aborted) return;
-
-              // Alternating Logic: 
-              // i=0 (Scene 1): Video
-              // i=1 (Scene 2): Image (Static)
-              // i=2 (Scene 3): Video
-              const isStatic = i % 2 !== 0;
-              
-              setProgress({ 
-                  status: 'visuals', 
-                  currentScene: i + 1, 
-                  totalScenes: total, 
-                  message: isStatic 
-                    ? `Drawing Scene ${i+1}...` 
-                    : `Filming Scene ${i + 1} with Veo... (This takes a moment)` 
-              });
-
-              try {
-                  // Reference for consistency
-                  const ref = i > 0 ? referenceImage : undefined;
-                  const baseImg = await generateBaseImage(i, ref);
-                  if (i === 0) referenceImage = baseImg;
-
-                  // Add significant delay between heavy generations to avoid rate limits
-                  await wait(2000, signal); 
-
-                  if (!isStatic) {
-                      // Generate Video
-                      const videoBase64 = await generateVeoVideo(generatedScript.scenes[i].visualDescription, baseImg, signal);
-                      generatedScript.scenes[i].videoUrl = videoBase64;
-                      generatedScript.scenes[i].isVideo = true;
-                  } else {
-                      // Static Image Only
-                      generatedScript.scenes[i].isVideo = false;
-                  }
-                  
-              } catch (e: any) {
-                  if (signal.aborted) return;
-
-                  const msg = e instanceof Error ? e.message : String(e);
-                  console.error(`Generation Failed for Scene ${i}:`, msg);
-                  
-                  // Fallback: If Veo fails, we already have baseImg set in generateBaseImage
-                  // Just mark it as not video
-                  generatedScript.scenes[i].isVideo = false; 
-                  if (!generatedScript.scenes[i].imageUrl) {
-                      generatedScript.scenes[i].imageUrl = createPlaceholder("Visual Generation Failed");
-                  }
-              }
-              // Extra safety delay after each scene loop
-              await wait(1000, signal);
-          }
-
-      } else {
-          // --- NANOBANANA SYSTEM (Sequential) ---
-          for (let i = 0; i < total; i++) {
-              if (signal.aborted) return;
-
-              setProgress({ 
-                  status: 'visuals', 
-                  currentScene: i + 1, 
-                  totalScenes: total, 
-                  message: `Drawing Scene ${i + 1}/${total}...` 
-              });
-              
-              try {
-                  const ref = i > 0 ? referenceImage : undefined;
-                  const img = await generateBaseImage(i, ref);
-                  if (i === 0) referenceImage = img;
-                  
-                  // Delay to respect rate limits
-                  await wait(1500, signal); 
-              } catch (e) {
-                   if (signal.aborted) return;
-                   console.error(`Visual gen failed for scene ${i}`, e);
-                   generatedScript.scenes[i].imageUrl = createPlaceholder(`Scene ${i+1} Missing`);
-              }
-          }
-      }
-
-      if (signal.aborted) return;
-      setScript({...generatedScript}); 
-      setAppState(AppState.PLAYING);
-      
-    } catch (error: any) {
-      if (signal.aborted) return; // Silent return on cancel
-      console.error("Production failed", error?.message || "Unknown error");
-      setErrorMessage(error?.message || "Oops! The studio ran out of magic.");
-    }
+    setStatus('loading');
+    // Simulate API call
+    setTimeout(() => {
+      setStatus('success');
+      setMessage('You’re on the list! 🎉');
+      setEmail('');
+      // Auto-dismiss success message after 3 seconds
+      setTimeout(() => setStatus('idle'), 3000);
+    }, 800);
   };
 
   return (
-    <div className={`min-h-screen bg-gradient-to-br ${currentTheme.mainGradient} p-4 md:p-8 flex items-center justify-center font-['Fredoka'] text-white transition-colors duration-700`}>
-      <div className={`w-full max-w-6xl aspect-video ${currentTheme.panelBg} backdrop-blur-3xl rounded-[2.5rem] shadow-2xl border ${currentTheme.panelBorder} relative overflow-hidden flex flex-col transition-colors duration-700`}>
-        
-        {appState === AppState.HOME && (
-            <div className="flex-1 flex flex-col items-center justify-center relative p-12 text-center space-y-10">
-                 <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 opacity-20 pointer-events-none">
-                     <div className="absolute top-10 left-10 w-64 h-64 bg-purple-500 rounded-full blur-[100px] animate-pulse"></div>
-                     <div className="absolute bottom-10 right-10 w-80 h-80 bg-blue-500 rounded-full blur-[120px] animate-pulse"></div>
-                 </div>
-                 
-                 <div className="absolute top-8 left-8 flex gap-4 z-20">
-                    <div className="bg-black/40 backdrop-blur-xl px-4 py-2 rounded-full border border-white/10 flex items-center gap-2 text-sm font-bold">
-                        {isPro ? <Crown size={16} className="text-yellow-400" /> : <Zap size={16} className="text-white/50" />}
-                        {isPro ? <span className="text-yellow-400">Pro Studio Active</span> : <span className="text-white/50">{veoTrials} Free Videos Left</span>}
-                    </div>
-                 </div>
+    <motion.div
+      className="w-full max-w-md mx-auto"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 1.2 }}
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-white/40" size={20} />
+          <input
+            type="email"
+            placeholder="Enter your email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full pl-10 pr-4 py-3 bg-white/10 backdrop-blur-sm border border-white/30 rounded-full text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+            aria-label="Email address for launch notification"
+            disabled={status === 'loading'}
+          />
+        </div>
+        <motion.button
+          type="submit"
+          className="px-8 py-3 bg-gradient-to-r from-yellow-400 to-pink-500 rounded-full font-semibold text-white shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          disabled={status === 'loading'}
+        >
+          {status === 'loading' ? 'Submitting...' : 'Notify Me'}
+        </motion.button>
+      </form>
+      {message && (
+        <motion.p
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`mt-3 text-sm ${status === 'error' ? 'text-red-300' : 'text-green-300'}`}
+        >
+          {message}
+        </motion.p>
+      )}
+    </motion.div>
+  );
+};
 
-                 <div className="absolute top-8 right-8 z-20">
-                     <button 
-                        onClick={() => setAppState(AppState.SHOP)}
-                        className="bg-black/40 backdrop-blur-xl px-4 py-2 rounded-full border border-white/10 flex items-center gap-2 text-sm font-bold hover:bg-black/60 transition-colors"
-                     >
-                         <ShoppingBag size={18} className="text-pink-400" />
-                         Shop
-                         <span className="bg-yellow-500 text-black text-xs px-2 py-0.5 rounded-full">{wallet} 🪙</span>
-                     </button>
-                 </div>
+// ---------- Main App Component ----------
 
-                 <div className="z-10 space-y-6 animate-fade-in-up">
-                     <div className="inline-flex items-center justify-center p-6 bg-white/10 rounded-3xl mb-4 shadow-lg backdrop-blur-md border border-white/10">
-                        <Sparkles className="w-16 h-16 text-yellow-400" />
-                     </div>
-                     <h1 className="text-7xl md:text-8xl font-black tracking-tighter drop-shadow-2xl bg-clip-text text-transparent bg-gradient-to-r from-white via-indigo-200 to-white">
-                        ToonCraft
-                     </h1>
-                     <p className="text-2xl text-indigo-100/80 font-medium max-w-2xl mx-auto">
-                        The AI Cartoon Studio for Kids
-                     </p>
+const App = () => {
+  // Set launch date 30 days from now for demo
+  const launchDate = new Date();
+  launchDate.setDate(launchDate.getDate() + 30);
 
-                     <div className="flex flex-col items-center gap-6 mt-8">
-                         <button 
-                            onClick={handleStartFlow}
-                            className="bg-white text-indigo-900 px-12 py-5 rounded-full font-black text-2xl shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3 group"
-                         >
-                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-200 transition-colors">
-                                <Video size={20} className="text-indigo-600" />
-                            </div>
-                            Start Filming <ChevronRight />
-                         </button>
-                     </div>
-                 </div>
-                 
-                 {savedProjects.length > 0 && (
-                     <div className="absolute bottom-8 left-0 w-full px-12">
-                         <div className="flex gap-4 overflow-x-auto pb-4 justify-center">
-                             {savedProjects.map(p => (
-                                 <div key={p.id} onClick={() => { setScript(p.script); setAppState(AppState.PLAYING); }} className="flex-shrink-0 w-48 bg-black/40 p-4 rounded-2xl cursor-pointer hover:bg-black/60 border border-white/5 transition-all">
-                                     <div className="text-sm font-bold truncate">{p.title}</div>
-                                     <div className="text-xs text-white/40">{p.date}</div>
-                                 </div>
-                             ))}
-                         </div>
-                     </div>
-                 )}
-            </div>
-        )}
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { staggerChildren: 0.2, delayChildren: 0.3 }
+    }
+  };
 
-        {appState === AppState.SHOP && (
-            <Shop 
-                currentTheme={currentTheme}
-                ownedThemes={ownedThemes}
-                currentVoiceId={currentVoiceId}
-                ownedVoices={ownedVoices}
-                wallet={wallet}
-                onBuyTheme={handleBuyTheme}
-                onSelectTheme={handleSelectTheme}
-                onBuyVoice={handleBuyVoice}
-                onSelectVoice={handleSelectVoice}
-                onClose={() => setAppState(AppState.HOME)}
+  const itemVariants = {
+    hidden: { opacity: 0, y: 30 },
+    visible: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 200 } }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center font-['Fredoka'] text-white overflow-hidden relative">
+      {/* Animated Background Overlay */}
+      <motion.div
+        className="absolute inset-0 bg-gradient-to-br from-indigo-900/50 via-purple-900/50 to-pink-900/50"
+        animate={{ opacity: [0.3, 0.6, 0.3] }}
+        transition={{ duration: 8, repeat: Infinity, ease: easeInOut }}
+      />
+
+      <FloatingOrbs />
+
+      <motion.div
+        className="text-center space-y-8 md:space-y-12 p-6 md:p-12 relative z-10 max-w-5xl mx-auto"
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+      >
+        {/* Main Title */}
+        <motion.div variants={itemVariants}>
+          <h1 className="text-6xl md:text-8xl lg:text-9xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-pink-500 to-cyan-400 drop-shadow-2xl">
+            Coming Soon!
+          </h1>
+          <motion.div
+            className="mt-4 w-48 md:w-64 h-1 bg-gradient-to-r from-yellow-400 to-pink-500 mx-auto rounded-full"
+            animate={{ scaleX: [0, 1, 1, 0] }}
+            transition={{ duration: 2, repeat: Infinity, repeatDelay: 1 }}
+          />
+        </motion.div>
+
+        {/* Subtitle */}
+        <motion.p
+          variants={itemVariants}
+          className="text-xl md:text-3xl text-white/80 font-medium drop-shadow-md"
+        >
+          Get ready for the most magical cartoon studio ever!
+        </motion.p>
+
+        {/* Icon Buttons */}
+        <motion.div
+          variants={itemVariants}
+          className="flex justify-center space-x-6 md:space-x-8"
+        >
+          <AnimatedIconButton icon={Sparkles} gradient="from-red-500 to-yellow-500" delay={0.4} />
+          <AnimatedIconButton icon={Video} gradient="from-blue-500 to-purple-500" delay={0.6} />
+          <AnimatedIconButton icon={Crown} gradient="from-green-500 to-teal-500" delay={0.8} />
+        </motion.div>
+
+        {/* Countdown Timer */}
+        <motion.div variants={itemVariants}>
+          <h2 className="text-2xl md:text-3xl font-semibold mb-6 flex items-center justify-center gap-2">
+            <Calendar className="text-yellow-400" />
+            Launching In
+            <PartyPopper className="text-pink-400" />
+          </h2>
+          <CountdownTimer targetDate={launchDate} />
+        </motion.div>
+
+        {/* Newsletter Form */}
+        <motion.div variants={itemVariants}>
+          <p className="text-lg md:text-xl text-white/60 mb-6">
+            Be the first to know when we launch!
+          </p>
+          <NewsletterForm />
+        </motion.div>
+
+        {/* Decorative Dots */}
+        <motion.div variants={itemVariants} className="flex justify-center space-x-3">
+          {['bg-yellow-400', 'bg-pink-400', 'bg-cyan-400'].map((color, i) => (
+            <motion.div
+              key={i}
+              className={`w-3 h-3 ${color} rounded-full`}
+              animate={{ scale: [1, 1.5, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.3 }}
             />
-        )}
-
-        {appState === AppState.AGE_INPUT && (
-            <div className="flex-1 flex flex-col items-center justify-center relative p-12 z-20 animate-fade-in">
-                <h2 className="text-5xl font-black mb-12">How old are you?</h2>
-                <div className="grid grid-cols-3 gap-6">
-                    {[5,6,7,8,9,10,11,12].map(age => (
-                        <button 
-                            key={age} 
-                            onClick={() => handleAgeSelect(age)} 
-                            className="w-24 h-24 rounded-2xl bg-white/10 hover:bg-white/20 border-2 border-white/10 hover:border-white/40 text-4xl font-black transition-all hover:scale-110"
-                        >
-                            {age}
-                        </button>
-                    ))}
-                </div>
-                <button onClick={() => setAppState(AppState.HOME)} className="mt-12 opacity-50 hover:opacity-100">Back</button>
-            </div>
-        )}
-
-        {appState === AppState.SCENE_SELECTION && (
-            <div className="flex-1 flex flex-col items-center justify-center relative p-12 z-20 animate-fade-in">
-                <div className="inline-flex items-center justify-center p-4 bg-white/10 rounded-full mb-6 shadow-lg backdrop-blur-md border border-white/10">
-                    <Layers className="w-8 h-8 text-cyan-400" />
-                </div>
-                <h2 className="text-4xl font-black mb-4">How many scenes?</h2>
-                <p className="text-xl text-white/50 mb-10">Choose the length of your cartoon.</p>
-                
-                <div className="grid grid-cols-4 gap-6">
-                    {[1,2,3,4,5,6,7,8].map(count => (
-                        <button 
-                            key={count} 
-                            onClick={() => { setSceneCount(count); setAppState(AppState.BRAINSTORM); }} 
-                            className="w-20 h-20 rounded-2xl bg-white/10 hover:bg-cyan-500 hover:text-black border-2 border-white/10 hover:border-cyan-400 text-3xl font-black transition-all hover:scale-110 flex items-center justify-center"
-                        >
-                            {count}
-                        </button>
-                    ))}
-                </div>
-                <button onClick={() => setAppState(AppState.AGE_INPUT)} className="mt-12 opacity-50 hover:opacity-100">Back</button>
-            </div>
-        )}
-
-        {appState === AppState.BRAINSTORM && (
-            <DirectorChat 
-                onStoryReady={handleStoryReady} 
-                theme={currentTheme} 
-                userAge={userAge || 8}
-                isMovieMode={isMovieMode}
-                setIsMovieMode={setIsMovieMode}
-                isPro={isPro}
-                wallet={wallet}
-                onOpenSubscription={() => setShowSubscriptionModal(true)}
-                veoTrials={veoTrials}
-                currentVoiceId={currentVoiceId}
-            />
-        )}
-
-        {appState === AppState.PRODUCING && (
-            <ProductionLoader 
-                progress={progress} 
-                theme={currentTheme} 
-                onCollectCoin={handleCollectCoin} 
-                userAge={userAge || 8}
-                onCancel={handleCancelProduction}
-            />
-        )}
-
-        {appState === AppState.PLAYING && script && (
-             <CinemaPlayer 
-                script={script} 
-                theme={currentTheme} 
-                onHome={() => setAppState(AppState.HOME)} 
-                onSave={() => saveProject(script)} 
-             />
-        )}
-
-        {errorMessage && (
-            <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xl flex flex-col items-center justify-center p-12 text-center animate-fade-in">
-                <Trash2 className="w-20 h-20 text-red-500 mb-6" />
-                <h2 className="text-3xl font-black mb-4">Oops!</h2>
-                <p className="text-xl opacity-70 mb-8 max-w-lg">{errorMessage}</p>
-                <div className="flex gap-4">
-                    <button onClick={() => setAppState(AppState.HOME)} className="px-8 py-3 rounded-xl bg-white/10 hover:bg-white/20">Go Home</button>
-                    {lastStoryContext && <button onClick={() => handleStoryReady(lastStoryContext)} className="px-8 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500">Try Again</button>}
-                </div>
-            </div>
-        )}
-
-        {showSubscriptionModal && (
-            <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col items-center justify-center p-8 animate-fade-in">
-                <div className="relative max-w-lg w-full bg-gradient-to-b from-indigo-900 to-black p-8 rounded-3xl border border-yellow-500/50 shadow-2xl text-center">
-                    <button onClick={() => setShowSubscriptionModal(false)} className="absolute top-4 right-4 text-white/50 hover:text-white">
-                        <X size={24} />
-                    </button>
-                    
-                    <div className="w-20 h-20 bg-yellow-400 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-yellow-500/50">
-                        <Crown size={40} className="text-black" />
-                    </div>
-                    
-                    <h2 className="text-3xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 to-yellow-500">
-                        Unlock ToonCraft Pro!
-                    </h2>
-                    <p className="text-indigo-200 mb-8">
-                        Ask your parents to unlock unlimited magic powers!
-                    </p>
-
-                    <div className="space-y-4 mb-8 text-left bg-white/5 p-6 rounded-2xl border border-white/5">
-                        <div className="flex items-center gap-3">
-                            <Video className="text-pink-400" size={20} />
-                            <span>Unlimited <strong>Magic AI Video</strong> generation</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <Sparkles className="text-cyan-400" size={20} />
-                            <span><strong>4K Quality</strong> Images</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <ShoppingBag className="text-yellow-400" size={20} />
-                            <span>Unlock <strong>All Studio Themes</strong></span>
-                        </div>
-                    </div>
-
-                    {clientSecret && (
-                        <Elements stripe={stripePromise} options={{ clientSecret }}>
-                            <CheckoutForm onComplete={() => {
-                                setIsPro(true);
-                                setShowSubscriptionModal(false);
-                                alert("Payment Successful! Welcome to Pro! 🎉");
-                                updateUserProfile({ is_pro: true }); // Ideally handled by webhook, but safe-ish for client-side optimistically
-                            }} />
-                        </Elements>
-                    )}
-                    {!clientSecret && <div className="text-center p-4">Loading payment options...</div>}
-                    <p className="mt-4 text-xs text-white/30">One-time purchase. Kids: Ask first!</p>
-                </div>
-            </div>
-        )}
-
-      </div>
+          ))}
+        </motion.div>
+      </motion.div>
     </div>
   );
 };
