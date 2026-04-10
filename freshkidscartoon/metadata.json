@@ -1,0 +1,7 @@
+{
+  "name": "MyCartoon",
+  "description": "A magical cartoon creator for kids. Use your voice to direct your own 30-minute cartoons with AI-generated characters, scenes, and narration!",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
