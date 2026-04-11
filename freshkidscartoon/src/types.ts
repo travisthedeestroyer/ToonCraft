@@ -40,6 +40,7 @@ export enum AppState {
   PRODUCING = 'PRODUCING',   // Generating assets
   PLAYING = 'PLAYING',       // Watching the cartoon
   SHOP = 'SHOP',             // Buying UI themes
+  COMING_SOON = 'COMING_SOON', // Added state for the coming soon screen
 }
 
 export type GenerationProgress = {

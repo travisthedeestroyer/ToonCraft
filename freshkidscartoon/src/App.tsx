@@ -8,6 +8,7 @@ import { CinemaPlayer } from './components/CinemaPlayer';
 import { CoppaPrivacyPolicy } from './components/CoppaPrivacyPolicy';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Shop } from './components/Shop';
+import { ComingSoon } from './components/ComingSoon';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo, generateBackgroundMusic, TokenTracker } from './services/geminiService';
 import { saveProjectToDB, getProjectsFromDB, getUserId } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
@@ -84,7 +85,7 @@ const ensureApiKey = async (): Promise<boolean> => {
 const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
   const stripe = useStripe();
   const elements = useElements();
-  const [errorMessage, setErrorMessage] = useState(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (event: any) => {
     event.preventDefault();
@@ -99,7 +100,7 @@ const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
     });
 
     if (error) {
-      setErrorMessage(error.message);
+      setErrorMessage(error.message ?? 'Payment failed. Please try again.');
     } else {
       // Payment successful!
       // In a real app, listen for webhook. 
@@ -130,6 +131,7 @@ const App: React.FC = () => {
 
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showCoppaModal, setShowCoppaModal] = useState(false);
+  const [showComingSoonPopup, setShowComingSoonPopup] = useState(false);
   const [userAge, setUserAge] = useState<number | null>(null);
   const [sceneCount, setSceneCount] = useState(4);
   const [isMovieMode, setIsMovieMode] = useState(false);
@@ -452,7 +454,13 @@ const App: React.FC = () => {
     } catch (error: any) {
       if (signal.aborted || error.message === "Aborted" || error.name === "AbortError") return;
       console.error("Production failed", error?.message || "Unknown error");
-      setErrorMessage(error?.message || "Oops! The studio ran out of magic.");
+      const message = error?.message || "Oops! The studio ran out of magic.";
+      if (/api key not valid|invalid api key|API_KEY_INVALID/i.test(message) || error?.details?.[0]?.reason === 'API_KEY_INVALID') {
+        setErrorMessage(null);
+        setShowComingSoonPopup(true);
+      } else {
+        setErrorMessage(message);
+      }
     }
   };
 
@@ -611,7 +619,21 @@ const App: React.FC = () => {
                 onCollectCoin={handleCollectCoin} 
                 userAge={userAge || 8}
                 onCancel={handleCancelProduction}
+                onShowComingSoon={() => {
+                    if (abortControllerRef.current) {
+                        abortControllerRef.current.abort();
+                        abortControllerRef.current = null;
+                    }
+                    setErrorMessage(null);
+                    setShowComingSoonPopup(true);
+                }}
             />
+        )}
+
+        {showComingSoonPopup && (
+          <div className="absolute inset-0 z-50">
+            <ComingSoon onBack={() => setShowComingSoonPopup(false)} />
+          </div>
         )}
 
         {appState === AppState.PLAYING && script && (

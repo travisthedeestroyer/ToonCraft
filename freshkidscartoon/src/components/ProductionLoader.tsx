@@ -3,6 +3,7 @@ import { Theme, GenerationProgress } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Sparkles, PenTool, Palette } from 'lucide-react';
 import { MiniGames } from './MiniGames';
+import { ComingSoonPopup } from './ComingSoonPopup';
 
 interface ProductionLoaderProps {
   progress: GenerationProgress;
@@ -10,6 +11,7 @@ interface ProductionLoaderProps {
   onCollectCoin: (amount: number) => void;
   userAge: number;
   onCancel: () => void;
+  onShowComingSoon?: () => void;
 }
 
 export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
@@ -17,11 +19,21 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
   theme,
   onCollectCoin,
   userAge,
-  onCancel
+  onCancel,
+  onShowComingSoon
 }) => {
   const [displayText, setDisplayText] = useState('');
   const [showSketch, setShowSketch] = useState(true);
   const [showTooltip, setShowTooltip] = useState(false);
+  const [showComingSoonPopup, setShowComingSoonPopup] = useState(false);
+
+  // Show "Coming Soon" popup 10 seconds after the production loader mounts
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowComingSoonPopup(true);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (progress.status === 'scripting' && progress.message) {
@@ -45,13 +57,18 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
       const tooltipTimer = setTimeout(() => {
         setShowTooltip(true);
       }, 4000);
+
+      const comingSoonTimer = onShowComingSoon ? setTimeout(() => {
+        onShowComingSoon();
+      }, 15000) : undefined;
       
       return () => {
         clearInterval(interval);
         clearTimeout(tooltipTimer);
+        if (comingSoonTimer) clearTimeout(comingSoonTimer);
       };
     }
-  }, [progress.status]);
+  }, [progress.status, onShowComingSoon]);
 
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -83,12 +100,16 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
           </div>
         </div>
         
-        <button 
+        <button
           onClick={onCancel}
           className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors z-50 border border-white/10 backdrop-blur-md"
         >
           <X size={24} />
         </button>
+
+        {showComingSoonPopup && (
+          <ComingSoonPopup onClose={() => setShowComingSoonPopup(false)} />
+        )}
       </div>
     );
   }
@@ -203,13 +224,17 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
       <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
         <MiniGames userAge={userAge} onScore={onCollectCoin} />
       </div>
-      
-      <button 
+
+      <button
         onClick={onCancel}
         className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors z-50 border border-white/10 backdrop-blur-md"
       >
         <X size={24} />
       </button>
+
+      {showComingSoonPopup && (
+        <ComingSoonPopup onClose={() => setShowComingSoonPopup(false)} />
+      )}
     </div>
   );
 };
