@@ -9,7 +9,7 @@ import { CoppaPrivacyPolicy } from './components/CoppaPrivacyPolicy';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Shop } from './components/Shop';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo, generateBackgroundMusic, TokenTracker } from './services/geminiService';
-import { saveProjectToDB, getProjectsFromDB, getUserId } from './utils/storage';
+import { saveProjectToDB, getProjectsFromDB, getProfileFromDB, getUserId } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { stripePromise } from './utils/stripe';
@@ -204,13 +204,20 @@ const [userAge, setUserAge] = useState<number | null>(null);
   }, [showSubscriptionModal]);
 
   useEffect(() => {
-    // Load Projects
     getProjectsFromDB().then(setSavedProjects).catch(console.error);
 
-    // Keep LocalStorage for simple non-critical UI preferences
+    getProfileFromDB().then(profile => {
+      if (!profile) return;
+      if (profile.is_pro) setIsPro(true);
+      if (typeof profile.veo_trials === 'number') setVeoTrials(profile.veo_trials);
+      if (typeof profile.wallet === 'number') setWallet(profile.wallet);
+      if (Array.isArray(profile.owned_themes)) setOwnedThemes(profile.owned_themes);
+      if (Array.isArray(profile.owned_voices)) setOwnedVoices(profile.owned_voices);
+    }).catch(console.error);
+
     const savedCurrentTheme = localStorage.getItem('mycartoon_current_theme');
     if (savedCurrentTheme) setCurrentThemeId(savedCurrentTheme);
-    
+
     const savedCurrentVoice = localStorage.getItem('mycartoon_current_voice');
     if (savedCurrentVoice) setCurrentVoiceId(savedCurrentVoice);
   }, []);
@@ -680,20 +687,22 @@ const [userAge, setUserAge] = useState<number | null>(null);
                     {clientSecret && (
                         <Elements stripe={stripePromise} options={{ clientSecret }}>
                             <CheckoutForm onComplete={async () => {
-                                // Optimistically set UI, but wait for webhook to update DB
                                 setIsPro(true);
                                 setShowSubscriptionModal(false);
                                 alert("Payment Successful! Welcome to Pro! 🎉");
-                                
-                                // Poll for backend update
+
+                                // Poll until the webhook confirms Pro status in the DB
                                 let attempts = 0;
                                 const pollInterval = setInterval(async () => {
                                     attempts++;
-                                    // Removed profile loading logic
-                                    if (attempts > 10) {
-                                        clearInterval(pollInterval);
-                                        console.warn("Webhook update for Pro status timed out.");
-                                    }
+                                    try {
+                                        const profile = await getProfileFromDB();
+                                        if (profile?.is_pro) {
+                                            clearInterval(pollInterval);
+                                            setIsPro(true);
+                                        }
+                                    } catch (_) { /* ignore */ }
+                                    if (attempts >= 10) clearInterval(pollInterval);
                                 }, 2000);
                             }} />
                         </Elements>

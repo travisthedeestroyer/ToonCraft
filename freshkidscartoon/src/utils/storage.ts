@@ -11,6 +11,17 @@ export const getUserId = async () => {
   return id;
 };
 
+export const getProfileFromDB = async () => {
+  if (!isSupabaseConfigured) return null;
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('profiles')
+    .select('is_pro, veo_trials, wallet, owned_themes, owned_voices')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return data;
+};
+
 export const saveProjectToDB = async (project: any) => {
   const userId = await getUserId();
   

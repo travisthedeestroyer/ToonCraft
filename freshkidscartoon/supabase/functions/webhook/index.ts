@@ -39,16 +39,14 @@ serve(async (req) => {
     const userId = paymentIntent.metadata.user_id
 
     if (userId) {
-      // Update user profile to Pro status
       const { error } = await supabaseClient
         .from('profiles')
-        .update({ is_pro: true })
-        .eq('user_id', userId)
+        .upsert({ user_id: userId, is_pro: true }, { onConflict: 'user_id' })
 
       if (error) {
-        console.error('Error updating profile:', error)
+        console.error('Error upserting profile:', error)
       } else {
-        console.log(`Successfully updated profile for user ${userId} to Pro status.`)
+        console.log(`Successfully set Pro status for user ${userId}.`)
       }
     }
   }
