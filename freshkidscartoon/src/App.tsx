@@ -8,7 +8,6 @@ import { CinemaPlayer } from './components/CinemaPlayer';
 import { CoppaPrivacyPolicy } from './components/CoppaPrivacyPolicy';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Shop } from './components/Shop';
-import { ComingSoon } from './components/ComingSoon';
 import { generateScript, generateSceneImage, generateNarration, generateVeoVideo, generateBackgroundMusic, TokenTracker } from './services/geminiService';
 import { saveProjectToDB, getProjectsFromDB, getUserId } from './utils/storage';
 import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
@@ -131,8 +130,7 @@ const App: React.FC = () => {
 
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showCoppaModal, setShowCoppaModal] = useState(false);
-  const [showComingSoonPopup, setShowComingSoonPopup] = useState(false);
-  const [userAge, setUserAge] = useState<number | null>(null);
+const [userAge, setUserAge] = useState<number | null>(null);
   const [sceneCount, setSceneCount] = useState(4);
   const [isMovieMode, setIsMovieMode] = useState(false);
   const [lastStoryContext, setLastStoryContext] = useState<string | null>(null);
@@ -455,12 +453,7 @@ const App: React.FC = () => {
       if (signal.aborted || error.message === "Aborted" || error.name === "AbortError") return;
       console.error("Production failed", error?.message || "Unknown error");
       const message = error?.message || "Oops! The studio ran out of magic.";
-      if (/api key not valid|invalid api key|API_KEY_INVALID/i.test(message) || error?.details?.[0]?.reason === 'API_KEY_INVALID') {
-        setErrorMessage(null);
-        setShowComingSoonPopup(true);
-      } else {
-        setErrorMessage(message);
-      }
+      setErrorMessage(message);
     }
   };
 
@@ -619,21 +612,7 @@ const App: React.FC = () => {
                 onCollectCoin={handleCollectCoin} 
                 userAge={userAge || 8}
                 onCancel={handleCancelProduction}
-                onShowComingSoon={() => {
-                    if (abortControllerRef.current) {
-                        abortControllerRef.current.abort();
-                        abortControllerRef.current = null;
-                    }
-                    setErrorMessage(null);
-                    setShowComingSoonPopup(true);
-                }}
             />
-        )}
-
-        {showComingSoonPopup && (
-          <div className="absolute inset-0 z-50">
-            <ComingSoon onBack={() => setShowComingSoonPopup(false)} />
-          </div>
         )}
 
         {appState === AppState.PLAYING && script && (
