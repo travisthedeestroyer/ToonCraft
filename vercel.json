@@ -1,0 +1,9 @@
+{
+  "buildCommand": "cd freshkidscartoon && npm install && npm run build",
+  "outputDirectory": "freshkidscartoon/dist",
+  "installCommand": "cd freshkidscartoon && npm install",
+  "framework": null,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
