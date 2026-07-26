@@ -217,6 +217,7 @@ Output a JSON object ONLY.
 Structure the story into exactly ${sceneCount} distinct scenes.
 ${isMovieMode ? 'Since this is a movie, keep visual descriptions SHORT and PUNCHY (under 15 words) for video generation. Ensure consistent character details (e.g. "blue cat in red hat") in every scene. CRITICAL: The narration for each scene MUST be exactly paced to fit an 8-second video. Write enough narration to fill 8 seconds, but no more (roughly 15-20 words).' : ''}
 - For age ${age}, ensure the vocabulary and themes are appropriate.
+Also return "characters": one line per character locking in their fixed appearance (name, colour, shape, clothing). The image generator is given this list for every scene, so it must never change between scenes.
 Each scene must have:
 - narrative: The exact text the narrator will speak (${isMovieMode ? 'roughly 15-20 words to fit an 8-second video' : '1-2 sentences max'}).
 - visualDescription: A detailed, vivid description for the image generator. ALWAYS repeat the main character's physical details (e.g., "The blue robot with red eyes") to ensure consistency. Specify the camera angle (e.g., "Wide shot", "Full body shot") to avoid extreme close-ups. Describe the background and action clearly.

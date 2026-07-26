@@ -5,9 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:coming-soon": "COMING_SOON=true vite",
     "build": "vite build",
-    "build:coming-soon": "COMING_SOON=true vite build",
     "preview": "vite preview",
     "test": "vitest",
     "lint": "tsc --noEmit"

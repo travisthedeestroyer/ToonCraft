@@ -8,15 +8,18 @@ import { CinemaPlayer } from './components/CinemaPlayer';
 import { CoppaPrivacyPolicy } from './components/CoppaPrivacyPolicy';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Shop } from './components/Shop';
-import { ComingSoon } from './components/ComingSoon';
-import { generateScript, generateSceneImage, generateNarration, generateVeoVideo, generateBackgroundMusic, TokenTracker } from './services/geminiService';
+import { generateScript, generateSceneImage, generateNarration, generateVeoVideo, generateBackgroundMusic, hashToSeed, TokenTracker } from './services/geminiService';
 import { saveProjectToDB, getProjectsFromDB, getUserId } from './utils/storage';
-import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers } from 'lucide-react';
+import { Sparkles, Trash2, ShoppingBag, ChevronRight, Crown, Zap, Video, X, Layers, Volume2 } from 'lucide-react';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { stripePromise } from './utils/stripe';
 import { supabase } from './utils/supabase';
 
 import { useAppStore } from './store';
+
+// Spoken versions of the on-screen questions, for pre-readers.
+const AGE_PROMPT = "How old are you? Tap the number that shows how old you are!";
+const SCENE_COUNT_PROMPT = "How long should your story be? Tap how many pictures you want in your cartoon!";
 
 const createPlaceholder = (text: string): string => {
     const canvas = document.createElement('canvas');
@@ -82,6 +85,18 @@ const ensureApiKey = async (): Promise<boolean> => {
     return true;
 };
 
+/** Replays the Director's spoken question. Sized for small fingers. */
+const HearItAgainButton = ({ onClick, isSpeaking }: { onClick: () => void; isSpeaking: boolean }) => (
+  <button
+    onClick={onClick}
+    aria-label="Hear the question again"
+    className="mb-8 sm:mb-10 flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 text-sm sm:text-base font-bold transition-all hover:scale-105 active:scale-95"
+  >
+    <Volume2 size={20} className={isSpeaking ? 'text-yellow-400 animate-pulse' : 'text-cyan-300'} />
+    {isSpeaking ? 'Listening...' : 'Hear it again'}
+  </button>
+);
+
 const CheckoutForm = ({ onComplete }: { onComplete: () => void }) => {
   const stripe = useStripe();
   const elements = useElements();
@@ -131,7 +146,6 @@ const App: React.FC = () => {
 
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showCoppaModal, setShowCoppaModal] = useState(false);
-  const [showComingSoonPopup, setShowComingSoonPopup] = useState(false);
   const [userAge, setUserAge] = useState<number | null>(null);
   const [sceneCount, setSceneCount] = useState(4);
   const [isMovieMode, setIsMovieMode] = useState(false);
@@ -168,6 +182,33 @@ const App: React.FC = () => {
 
   // Abort Controller for cancelling production
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Director voice-over for the pick-a-number screens, so kids who can't read
+  // yet still know what's being asked.
+  const directorAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isDirectorSpeaking, setIsDirectorSpeaking] = useState(false);
+
+  const stopSpeaking = () => {
+      if (directorAudioRef.current) {
+          directorAudioRef.current.pause();
+          directorAudioRef.current = null;
+      }
+      setIsDirectorSpeaking(false);
+  };
+
+  // Ask the question out loud whenever one of these screens opens. Narration is
+  // cached by text, so coming back to a screen replays instantly and for free.
+  useEffect(() => {
+      if (appState === AppState.AGE_INPUT) {
+          speak(AGE_PROMPT);
+      } else if (appState === AppState.SCENE_SELECTION) {
+          speak(SCENE_COUNT_PROMPT);
+      } else {
+          stopSpeaking();
+      }
+  }, [appState]);
+
+  useEffect(() => stopSpeaking, []);
 
   useEffect(() => {
       if (showSubscriptionModal && !clientSecret) {
@@ -299,10 +340,10 @@ const App: React.FC = () => {
       if (age < 10) {
           setSceneCount(4);
           setAppState(AppState.BRAINSTORM);
-          speak("Great! Let's think of a fun story together!");
+          speak("Great! Let's think of a fun story together!", age);
       } else {
+          // The scene-selection screen asks its own question out loud.
           setAppState(AppState.SCENE_SELECTION);
-          speak("Awesome! How long should your story be?");
       }
   };
 
@@ -324,13 +365,22 @@ const App: React.FC = () => {
       setErrorMessage(null);
   };
 
-  const speak = async (text: string) => {
-    if (!userAge) return;
+  // The Director's voice. `ageOverride` matters on the age screen, where we don't
+  // know the age yet, and right after picking one, where the state hasn't settled.
+  const speak = async (text: string, ageOverride?: number) => {
+    const age = ageOverride ?? userAge ?? 8;
     try {
-      const audioBase64 = await generateNarration(text, userAge, currentVoiceId);
+      const audioBase64 = await generateNarration(text, age, currentVoiceId);
       if (audioBase64) {
+        stopSpeaking();
         const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
-        audio.play().catch(e => console.warn("Speech play blocked", e));
+        directorAudioRef.current = audio;
+        audio.onended = () => setIsDirectorSpeaking(false);
+        setIsDirectorSpeaking(true);
+        audio.play().catch(e => {
+          setIsDirectorSpeaking(false);
+          console.warn("Speech play blocked", e);
+        });
       }
     } catch (e) {
       console.warn("Speech failed", e);
@@ -339,7 +389,11 @@ const App: React.FC = () => {
 
   const handleStoryReady = async (storyContext: string) => {
     if (!userAge) return;
-    
+
+    // Movie mode burns Veo credits — gate it before we spend anything.
+    // Image mode is always free and never gated.
+    if (isMovieModeRef.current && !checkVeoAccess(sceneCount)) return;
+
     // Reset Cancel Signal
     if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
@@ -375,62 +429,88 @@ const App: React.FC = () => {
       generatedScript.targetAge = userAge;
       generatedScript.isMovieMode = currentMovieMode;
       const total = generatedScript.scenes.length;
-      
-      // Initialize scenes with status
-      generatedScript.scenes = generatedScript.scenes.map(s => ({ ...s, isReady: false, isGenerating: false }));
-      setScript(generatedScript);
+
+      // One seed and one character sheet for the whole movie: the free image
+      // provider has no reference-frame support, so this is what holds the look
+      // together from scene to scene.
+      const styleSeed = hashToSeed(`${generatedScript.title || ''}|${storyContext}`);
+      const characterBible = (generatedScript.characters || []).join('; ');
+
+      // Working copy of the scenes. Every update replaces the scene object AND the
+      // array, so consumers (CinemaPlayer) actually see the change and can resume
+      // from an intermission as soon as the next scene lands.
+      let scenes = generatedScript.scenes.map(s => ({ ...s, isReady: false, isGenerating: false }));
+
+      const publish = () => {
+          setScript({ ...generatedScript, scenes: [...scenes] });
+          setProgress(prev => ({ ...prev, scenesReady: scenes.filter(s => s.isReady).length }));
+      };
+
+      generatedScript.scenes = scenes;
+      publish();
 
       // Progressive Generation Helper
       const generateSceneAssets = async (index: number) => {
-          const scene = generatedScript.scenes[index];
+          const scene = scenes[index];
           if (scene.isReady || scene.isGenerating) return;
-          scene.isGenerating = true;
+
+          const patch = (changes: Partial<typeof scene>) => {
+              scenes = scenes.map((s, i) => (i === index ? { ...s, ...changes } : s));
+              publish();
+          };
+
+          patch({ isGenerating: true });
 
           try {
-              // Audio
-              if (!scene.audioUrl) {
-                  const audio = await generateNarration(scene.narrative, userAge, currentVoiceId, signal);
-                  scene.audioUrl = audio;
-              }
-              if (!scene.bgMusicUrl && scene.musicMood) {
-                  const bgMusic = await generateBackgroundMusic(scene.musicMood, signal);
-                  scene.bgMusicUrl = bgMusic;
+              // Narration and music are independent of the visuals, so kick them off
+              // in parallel with the image instead of blocking on them.
+              const narrationPromise = scene.audioUrl
+                  ? Promise.resolve(scene.audioUrl)
+                  : generateNarration(scene.narrative, userAge, currentVoiceId, signal);
+
+              const musicPromise = (!scene.bgMusicUrl && scene.musicMood)
+                  ? generateBackgroundMusic(scene.musicMood, signal)
+                  : Promise.resolve(scene.bgMusicUrl ?? '');
+
+              // Visuals — the previous scene's image anchors character consistency.
+              const ref = index > 0 ? scenes[index - 1].imageUrl : undefined;
+              const imagePromise = generateSceneImage(scene.visualDescription, userAge, ref, false, signal, {
+                  seed: styleSeed,
+                  characterBible,
+              });
+
+              const [audioUrl, bgMusicUrl, img] = await Promise.all([
+                  narrationPromise,
+                  musicPromise,
+                  imagePromise,
+              ]);
+
+              if (signal.aborted) return;
+
+              // Image mode is done here; movie mode layers video on top of the image.
+              if (!currentMovieMode) {
+                  patch({ audioUrl, bgMusicUrl, imageUrl: img, isVideo: false, isReady: true, isGenerating: false });
+                  return;
               }
 
-              // Visuals
-              const ref = index > 0 ? generatedScript.scenes[index-1].imageUrl : undefined;
-              const img = await generateSceneImage(scene.visualDescription, userAge, ref, false, signal);
-              scene.imageUrl = img;
-
-              if (currentMovieMode) {
-                  try {
-                      const video = await generateVeoVideo(scene.visualDescription, img, signal);
-                      scene.videoUrl = video;
-                      scene.isVideo = true;
-                  } catch (e: any) {
-                      if (signal.aborted || e.message === "Aborted" || e.name === "AbortError") throw e;
-                      console.warn(`Video failed for scene ${index}, falling back to image`, e);
-                      scene.isVideo = false;
-                      scene.fallbackToImage = true;
-                  }
-              } else {
-                  scene.isVideo = false;
+              try {
+                  const video = await generateVeoVideo(scene.visualDescription, img, signal);
+                  patch({ audioUrl, bgMusicUrl, imageUrl: img, videoUrl: video, isVideo: true, isReady: true, isGenerating: false });
+              } catch (e: any) {
+                  if (signal.aborted || e.message === "Aborted" || e.name === "AbortError") throw e;
+                  console.warn(`Video failed for scene ${index}, falling back to image`, e);
+                  patch({ audioUrl, bgMusicUrl, imageUrl: img, isVideo: false, fallbackToImage: true, isReady: true, isGenerating: false });
               }
-
-              scene.isReady = true;
-              scene.isGenerating = false;
-              
-              // Update progress
-              const readyCount = generatedScript.scenes.filter(s => s.isReady).length;
-              setProgress(prev => ({ ...prev, scenesReady: readyCount }));
-              setScript({ ...generatedScript });
           } catch (e: any) {
               if (signal.aborted || e.message === "Aborted" || e.name === "AbortError") throw e;
               console.error(`Failed to generate scene ${index}`, e);
-              scene.isGenerating = false;
-              // Fallback for safety
-              if (!scene.imageUrl) scene.imageUrl = createPlaceholder("Magic failed here!");
-              scene.isReady = true; // Mark as ready so we don't get stuck
+              // Mark ready with a placeholder so playback never stalls on one bad scene.
+              patch({
+                  imageUrl: scenes[index].imageUrl || createPlaceholder("Magic failed here!"),
+                  isVideo: false,
+                  isReady: true,
+                  isGenerating: false,
+              });
           }
       };
 
@@ -455,12 +535,11 @@ const App: React.FC = () => {
       if (signal.aborted || error.message === "Aborted" || error.name === "AbortError") return;
       console.error("Production failed", error?.message || "Unknown error");
       const message = error?.message || "Oops! The studio ran out of magic.";
-      if (/api key not valid|invalid api key|API_KEY_INVALID/i.test(message) || error?.details?.[0]?.reason === 'API_KEY_INVALID') {
-        setErrorMessage(null);
-        setShowComingSoonPopup(true);
-      } else {
-        setErrorMessage(message);
-      }
+      const isKeyProblem = /api key not valid|invalid api key|API_KEY_INVALID/i.test(message)
+        || error?.details?.[0]?.reason === 'API_KEY_INVALID';
+      setErrorMessage(isKeyProblem
+        ? "The studio's magic key isn't working. Please ask a grown-up to check the API key."
+        : message);
     }
   };
 
@@ -558,7 +637,8 @@ const App: React.FC = () => {
 
         {appState === AppState.AGE_INPUT && (
             <div className="flex-1 flex flex-col items-center justify-center relative p-6 sm:p-12 z-20 animate-fade-in">
-                <h2 className="text-4xl sm:text-5xl font-black mb-8 sm:mb-12 text-center">How old are you?</h2>
+                <h2 className="text-4xl sm:text-5xl font-black mb-4 text-center">How old are you?</h2>
+                <HearItAgainButton onClick={() => speak(AGE_PROMPT)} isSpeaking={isDirectorSpeaking} />
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
                     {[5,6,7,8,9,10,11,12].map(age => (
                         <button 
@@ -580,8 +660,9 @@ const App: React.FC = () => {
                     <Layers className="w-8 h-8 text-cyan-400" />
                 </div>
                 <h2 className="text-3xl sm:text-4xl font-black mb-4 text-center">How long is your story?</h2>
-                <p className="text-lg sm:text-xl text-white/50 mb-8 sm:mb-10 text-center">Pick how many pictures your story will have!</p>
-                
+                <p className="text-lg sm:text-xl text-white/50 mb-4 text-center">Pick how many pictures your story will have!</p>
+                <HearItAgainButton onClick={() => speak(SCENE_COUNT_PROMPT)} isSpeaking={isDirectorSpeaking} />
+
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 sm:gap-6">
                     {[1,2,3,4,5,6,7,8].map(count => (
                         <button 
@@ -619,21 +700,7 @@ const App: React.FC = () => {
                 onCollectCoin={handleCollectCoin} 
                 userAge={userAge || 8}
                 onCancel={handleCancelProduction}
-                onShowComingSoon={() => {
-                    if (abortControllerRef.current) {
-                        abortControllerRef.current.abort();
-                        abortControllerRef.current = null;
-                    }
-                    setErrorMessage(null);
-                    setShowComingSoonPopup(true);
-                }}
             />
-        )}
-
-        {showComingSoonPopup && (
-          <div className="absolute inset-0 z-50">
-            <ComingSoon onBack={() => setShowComingSoonPopup(false)} />
-          </div>
         )}
 
         {appState === AppState.PLAYING && script && (
@@ -659,7 +726,7 @@ const App: React.FC = () => {
                 <h2 className="text-3xl font-black mb-4">Oops!</h2>
                 <p className="text-xl opacity-70 mb-8 max-w-lg">{errorMessage}</p>
                 <div className="flex gap-4">
-                    <button onClick={() => setAppState(AppState.HOME)} className="px-8 py-3 rounded-xl bg-white/10 hover:bg-white/20">Go Home</button>
+                    <button onClick={() => { setErrorMessage(null); setScript(null); setAppState(AppState.HOME); }} className="px-8 py-3 rounded-xl bg-white/10 hover:bg-white/20">Go Home</button>
                     {lastStoryContext && <button onClick={() => handleStoryReady(lastStoryContext)} className="px-8 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500">Try Again</button>}
                 </div>
             </div>

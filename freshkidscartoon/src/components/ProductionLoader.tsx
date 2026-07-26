@@ -3,7 +3,6 @@ import { Theme, GenerationProgress } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Sparkles, PenTool, Palette } from 'lucide-react';
 import { MiniGames } from './MiniGames';
-import { ComingSoonPopup } from './ComingSoonPopup';
 
 interface ProductionLoaderProps {
   progress: GenerationProgress;
@@ -11,7 +10,6 @@ interface ProductionLoaderProps {
   onCollectCoin: (amount: number) => void;
   userAge: number;
   onCancel: () => void;
-  onShowComingSoon?: () => void;
 }
 
 export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
@@ -19,21 +17,16 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
   theme,
   onCollectCoin,
   userAge,
-  onCancel,
-  onShowComingSoon
+  onCancel
 }) => {
   const [displayText, setDisplayText] = useState('');
   const [showSketch, setShowSketch] = useState(true);
   const [showTooltip, setShowTooltip] = useState(false);
-  const [showComingSoonPopup, setShowComingSoonPopup] = useState(false);
 
-  // Show "Coming Soon" popup 10 seconds after the production loader mounts
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowComingSoonPopup(true);
-    }, 10000);
-    return () => clearTimeout(timer);
-  }, []);
+  // Avoid NaN before the script (and therefore the scene count) exists
+  const percentComplete = progress.totalScenes > 0
+    ? Math.round((progress.scenesReady / progress.totalScenes) * 100)
+    : 0;
 
   useEffect(() => {
     if (progress.status === 'scripting' && progress.message) {
@@ -58,17 +51,12 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
         setShowTooltip(true);
       }, 4000);
 
-      const comingSoonTimer = onShowComingSoon ? setTimeout(() => {
-        onShowComingSoon();
-      }, 15000) : undefined;
-      
       return () => {
         clearInterval(interval);
         clearTimeout(tooltipTimer);
-        if (comingSoonTimer) clearTimeout(comingSoonTimer);
       };
     }
-  }, [progress.status, onShowComingSoon]);
+  }, [progress.status]);
 
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -84,10 +72,10 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
             <div className="flex flex-col">
               <span className="text-white font-bold text-sm">Making Movie Magic...</span>
               <div className="w-48 h-2 bg-white/20 rounded-full overflow-hidden mt-1">
-                <motion.div 
+                <motion.div
                   className="h-full bg-gradient-to-r from-indigo-500 to-pink-500"
                   initial={{ width: 0 }}
-                  animate={{ width: `${(progress.scenesReady / progress.totalScenes) * 100}%` }}
+                  animate={{ width: `${percentComplete}%` }}
                 />
               </div>
             </div>
@@ -106,10 +94,6 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
         >
           <X size={24} />
         </button>
-
-        {showComingSoonPopup && (
-          <ComingSoonPopup onClose={() => setShowComingSoonPopup(false)} />
-        )}
       </div>
     );
   }
@@ -201,13 +185,13 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
           </AnimatePresence>
           <div className="flex justify-between text-sm font-bold text-white/60 px-2">
             <span>{progress.scenesReady} / {progress.totalScenes} Scenes Ready</span>
-            <span>{Math.round((progress.scenesReady / progress.totalScenes) * 100)}%</span>
+            <span>{percentComplete}%</span>
           </div>
           <div className="w-full h-4 bg-black/40 rounded-full overflow-hidden border border-white/10 shadow-inner">
-            <motion.div 
+            <motion.div
               className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 shadow-[0_0_15px_rgba(99,102,241,0.5)]"
               initial={{ width: 0 }}
-              animate={{ width: `${(progress.scenesReady / progress.totalScenes) * 100}%` }}
+              animate={{ width: `${percentComplete}%` }}
             />
           </div>
         </div>
@@ -231,10 +215,6 @@ export const ProductionLoader: React.FC<ProductionLoaderProps> = ({
       >
         <X size={24} />
       </button>
-
-      {showComingSoonPopup && (
-        <ComingSoonPopup onClose={() => setShowComingSoonPopup(false)} />
-      )}
     </div>
   );
 };

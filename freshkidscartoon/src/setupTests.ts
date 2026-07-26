@@ -20,6 +20,18 @@ vi.mock('@stripe/stripe-js', () => ({
   }),
 }));
 
+// Howler drives real Web Audio, which happy-dom doesn't implement
+vi.mock('howler', () => {
+  class Howl {
+    play = vi.fn();
+    stop = vi.fn();
+    pause = vi.fn();
+    volume = vi.fn();
+    on = vi.fn();
+  }
+  return { Howl, Howler: { mute: vi.fn(), volume: vi.fn() } };
+});
+
 // Mock Browser APIs not present in happy-dom
 class MockAudioContext {
     createAnalyser = vi.fn(() => ({ fftSize: 2048 }));

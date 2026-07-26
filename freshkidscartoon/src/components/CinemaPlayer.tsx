@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Script, Theme } from '../types';
 import { Play, Pause, RotateCcw, Home, Save, Music, Volume2, ChevronLeft, ChevronRight, Clapperboard } from 'lucide-react';
 import { MUSIC_TRACKS, SOUND_EFFECTS } from '../constants';
+import { toImageDataUrl } from '../services/geminiService';
 import { useAppStore } from '../store';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -37,6 +38,7 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
   const sfxRef = useRef<HTMLAudioElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
+  const endedForSceneRef = useRef(-1);
   const currentScene = script?.scenes?.[currentSceneIndex];
   const isVideoActive = currentScene?.isVideo && !videoError;
 
@@ -152,9 +154,9 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
     let animationFrameId: number;
     let img: HTMLImageElement | null = null;
 
-    if (!currentScene.isVideo) {
+    if (!currentScene.isVideo && currentScene.imageUrl) {
       img = new Image();
-      img.src = `data:image/jpeg;base64,${currentScene.imageUrl}`;
+      img.src = toImageDataUrl(currentScene.imageUrl);
     }
 
     const draw = () => {
@@ -197,6 +199,8 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
   
   useEffect(() => {
     isMountedRef.current = true;
+    // Intermission lives in the global store, so clear any leftover from a previous movie.
+    setIsIntermission(false);
     return () => { isMountedRef.current = false; };
   }, []);
 
@@ -228,17 +232,22 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
     }
   }, []);
 
-  // Asset Loading - Triggered when scene index changes
+  // Asset Loading - Triggered when the scene we're showing changes.
+  // Keyed on the scene object rather than the whole script: background generation
+  // publishes a new script on every finished scene, and reloading here would
+  // restart narration mid-playback.
   useEffect(() => {
-    if (!script || currentSceneIndex >= script.scenes.length) return;
-    
+    if (!currentScene) return;
+
+    endedForSceneRef.current = -1;
+
     // We wrap in a small timeout to ensure refs are bound after render
     const timer = setTimeout(() => {
         loadSceneAssets(currentSceneIndex);
     }, 0);
-    
+
     return () => clearTimeout(timer);
-  }, [currentSceneIndex, script]);
+  }, [currentSceneIndex, currentScene]);
 
   // Sync Play state with Music
   useEffect(() => {
@@ -280,44 +289,33 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
     };
   }, []);
 
+  // Assigning src="" resolves to the page URL and makes the element fire a spurious
+  // `error` event, which used to skip scenes. Removing the attribute is the safe reset.
+  const setMediaSource = (el: HTMLMediaElement | null, src?: string) => {
+    if (!el) return;
+    if (src) {
+        el.src = src;
+        el.load();
+    } else {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+    }
+  };
+
   const loadSceneAssets = (index: number) => {
     const scene = script.scenes[index];
     setVideoError(false);
-    
-    // Audio
-    if (audioRef.current) {
-        if (scene.audioUrl) {
-            audioRef.current.src = `data:audio/wav;base64,${scene.audioUrl}`;
-            audioRef.current.load();
-        } else {
-             audioRef.current.src = "";
-        }
-    }
 
-    // SFX
-    if (sfxRef.current) {
-        if (scene.sfxUrl) {
-            sfxRef.current.src = scene.sfxUrl;
-            sfxRef.current.load();
-        } else {
-            sfxRef.current.src = "";
-        }
-    }
+    setMediaSource(audioRef.current, scene.audioUrl ? `data:audio/wav;base64,${scene.audioUrl}` : undefined);
+    setMediaSource(sfxRef.current, scene.sfxUrl);
 
     // Background Music (Scene specific overrides global)
     if (scene.bgMusicUrl) {
         setBackgroundMusicUrl(scene.bgMusicUrl);
     }
 
-    // Video
-    if (videoRef.current) {
-        if (scene.isVideo && scene.videoUrl) {
-            videoRef.current.src = `data:video/mp4;base64,${scene.videoUrl}`;
-            videoRef.current.load();
-        } else {
-            videoRef.current.src = "";
-        }
-    }
+    setMediaSource(videoRef.current, scene.isVideo && scene.videoUrl ? `data:video/mp4;base64,${scene.videoUrl}` : undefined);
   };
 
   // Playback logic
@@ -356,6 +354,7 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
     };
 
     // Small delay to ensure assets are loaded
+    let silentSceneTimer: ReturnType<typeof setTimeout> | undefined;
     const playTimer = setTimeout(() => {
       if (!isMountedRef.current || !isPlayingRef.current) return;
 
@@ -363,9 +362,10 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
       if (currentScene.audioUrl && audioRef.current) {
          safePlay(audioRef.current, "Narration");
       } else if (!isVideoActive) {
-         // Fallback timer if no audio and no video
+         // No narration and no video: hold the still frame long enough to read the
+         // caption, then move on. This is the common path when TTS is unavailable.
          const duration = Math.max(3000, (currentScene.narrative?.length || 0) * 150);
-         setTimeout(() => {
+         silentSceneTimer = setTimeout(() => {
              if (isPlayingRef.current && isMountedRef.current) handleEnded();
          }, duration);
       }
@@ -382,7 +382,10 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
       }
     }, 100);
 
-    return () => clearTimeout(playTimer);
+    return () => {
+      clearTimeout(playTimer);
+      if (silentSceneTimer) clearTimeout(silentSceneTimer);
+    };
   }, [isPlaying, currentSceneIndex, currentScene, isVideoActive]);
 
   const handlePlayPause = () => {
@@ -396,6 +399,10 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
 
   const handleEnded = () => {
     if (!isMountedRef.current) return;
+    // Narration `ended`, video `ended` and the silent-scene timer can all fire for the
+    // same scene. Only the first one should advance.
+    if (endedForSceneRef.current === currentSceneIndex) return;
+    endedForSceneRef.current = currentSceneIndex;
 
     if (currentSceneIndex < script.scenes.length - 1) {
       const nextScene = script.scenes[currentSceneIndex + 1];
@@ -454,7 +461,7 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
       return effects[index % effects.length];
   };
   
-  const marqueeDuration = Math.max(6, (currentScene.narrative?.length || 0) * 0.2);
+  const marqueeDuration = Math.max(6, (currentScene?.narrative?.length || 0) * 0.2);
 
   if (!script || !script.scenes || script.scenes.length === 0) {
       return (
@@ -589,9 +596,10 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
                 }
             }}
         />
-        <img 
+        <img
             key={currentSceneIndex}
-            src={`data:image/jpeg;base64,${currentScene.imageUrl}`} 
+            src={toImageDataUrl(currentScene.imageUrl) || undefined}
+            alt={currentScene.visualDescription || 'Cartoon scene'}
             className={`w-full h-full object-cover transition-transform duration-[20s] ease-linear will-change-transform ${isPlaying ? getKenBurnsEffect(currentSceneIndex) : 'scale-100 origin-center'} ${!isVideoActive ? 'block' : 'hidden'}`} 
         />
         
@@ -640,7 +648,7 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
               </p>
               <div className="mt-12 flex gap-2">
                 {[0, 1, 2].map(i => (
-                  <motion.div 
+                  <motion.div
                     key={i}
                     animate={{ scale: [1, 1.5, 1] }}
                     transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
@@ -648,6 +656,15 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
                   />
                 ))}
               </div>
+
+              {/* Escape hatch: the overlay sits above the toolbar, so if the next scene
+                  never arrives (production cancelled or failed) the child isn't trapped. */}
+              <button
+                onClick={() => { setIsIntermission(false); onHome(); }}
+                className="mt-10 px-6 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white text-sm font-bold border border-white/10 transition-colors"
+              >
+                Back to Home
+              </button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -662,15 +679,17 @@ export const CinemaPlayer: React.FC<CinemaPlayerProps> = ({ script, theme, onHom
         )}
       </div>
 
-      <audio 
-          ref={audioRef} 
+      <audio
+          ref={audioRef}
           onEnded={() => {
               if (!isVideoActive) handleEnded();
-          }} 
-          onError={() => { 
-              if (!isVideoActive) handleEnded(); 
           }}
-          className="hidden" 
+          onError={() => {
+              // Ignore the error fired while the element is being reset between scenes.
+              if (!currentScene?.audioUrl || !isPlayingRef.current) return;
+              if (!isVideoActive) handleEnded();
+          }}
+          className="hidden"
       />
       <audio 
           ref={sfxRef} 

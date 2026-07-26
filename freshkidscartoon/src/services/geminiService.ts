@@ -143,12 +143,20 @@ const cleanJson = (text: string): string => {
   return clean.trim();
 };
 
-const getMimeType = (base64: string): string => {
+export const getMimeType = (base64: string): string => {
     if (base64.startsWith('/9j/')) return 'image/jpeg';
     if (base64.startsWith('iVBORw0KGgo')) return 'image/png';
     if (base64.startsWith('UklGR')) return 'image/webp';
     return 'image/jpeg';
 };
+
+/**
+ * Builds a renderable data URL from raw base64 image bytes.
+ * The provider that served the image decides the format (Gemini returns PNG,
+ * Imagen JPEG, Pollinations JPEG), so we sniff instead of assuming.
+ */
+export const toImageDataUrl = (base64?: string): string =>
+    base64 ? `data:${getMimeType(base64)};base64,${base64}` : '';
 
 // --- CORE SERVICES ---
 
@@ -283,6 +291,12 @@ export const generateScript = async (storyContext: string, age: number, isMovieM
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
+                        title: { type: Type.STRING, description: "A short, fun title for the cartoon" },
+                        characters: {
+                            type: Type.ARRAY,
+                            description: "Every character, each as one line of fixed physical detail (e.g. 'Pip: a small round blue robot with big yellow eyes and a red scarf')",
+                            items: { type: Type.STRING }
+                        },
                         scenes: {
                             type: Type.ARRAY,
                             items: {
@@ -325,135 +339,237 @@ export const generateScript = async (storyContext: string, age: number, isMovieM
     }, "Script", signal);
 };
 
+// --- IMAGE GENERATION ---
+
+export interface SceneImageOptions {
+    /** Stable seed for the whole movie so the free provider keeps one look across scenes. */
+    seed?: number;
+    /** Character descriptions repeated into every prompt, for continuity. */
+    characterBible?: string;
+}
+
 /**
- * Generates a consistent scene image.
- * Tries Gemini Image models first, falls back to Imagen.
+ * Image mode runs on a free, keyless provider (Pollinations.ai) by default, so a
+ * cartoon can always be made without an API key or Gemini quota. Set
+ * VITE_IMAGE_PROVIDER=gemini to prefer the paid models instead — they give
+ * stronger character consistency because they accept the previous frame as a
+ * reference image. Either way the other providers remain as fallbacks.
  */
-export const generateSceneImage = async (prompt: string, age: number, previousImageBase64?: string, isRetry = false, signal?: AbortSignal): Promise<string> => {
+const IMAGE_PROVIDER = (import.meta.env.VITE_IMAGE_PROVIDER || 'free').toLowerCase();
+
+const FREE_IMAGE_TIMEOUT_MS = 90000;
+
+/** Deterministic 32-bit hash, used to derive one stable image seed per story. */
+export const hashToSeed = (input: string): number => {
+    let h = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        h ^= input.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return Math.abs(h) % 1000000;
+};
+
+const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+        const result = reader.result as string;
+        if (result && result.includes(',')) {
+            resolve(result.split(',')[1]);
+        } else {
+            reject(new Error("Invalid data URL"));
+        }
+    };
+    reader.onerror = () => reject(new Error("FileReader error"));
+    reader.readAsDataURL(blob);
+});
+
+/**
+ * Fetch that gives up after `ms`. A timeout surfaces as a normal Error so callers
+ * can fall back, while a caller-triggered abort still surfaces as an AbortError.
+ */
+const fetchWithTimeout = async (url: string, ms: number, signal?: AbortSignal): Promise<Response> => {
+    const controller = new AbortController();
+    let timedOut = false;
+    const onAbort = () => controller.abort();
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, ms);
+    signal?.addEventListener('abort', onAbort);
+    try {
+        return await fetch(url, { signal: controller.signal });
+    } catch (error: any) {
+        if (timedOut) throw new Error(`Request timed out after ${Math.round(ms / 1000)}s`);
+        throw error;
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    }
+};
+
+/**
+ * Free, keyless image generation. No account, no quota, no cost.
+ * The seed is held constant across a movie so every scene shares one art style.
+ */
+const generateFreeImage = async (prompt: string, seed: number, signal?: AbortSignal): Promise<string> => {
+    // The prompt travels in the URL path, so keep it clear of length limits.
+    const encodedPrompt = encodeURIComponent(prompt.slice(0, 1200));
+    let lastError: any;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        if (signal?.aborted) throw new Error("Aborted");
+
+        const params = new URLSearchParams({
+            width: '1280',
+            height: '720',
+            seed: String(seed + attempt),
+            nologo: 'true',
+            safe: 'true',
+        });
+        // Second attempt drops the model pin in case that model is unavailable.
+        if (attempt === 0) params.set('model', 'flux');
+
+        try {
+            const response = await fetchWithTimeout(
+                `https://image.pollinations.ai/prompt/${encodedPrompt}?${params.toString()}`,
+                FREE_IMAGE_TIMEOUT_MS,
+                signal
+            );
+            if (!response.ok) throw new Error(`Free image provider returned ${response.status}`);
+
+            const blob = await response.blob();
+            if (blob.size === 0) throw new Error("Free image provider returned an empty image");
+
+            return await blobToBase64(blob);
+        } catch (error: any) {
+            if (signal?.aborted || error.message === "Aborted" || error.name === "AbortError") throw error;
+            console.warn(`⚠️ [Free Image] attempt ${attempt + 1} failed:`, error?.message || error);
+            lastError = error;
+        }
+    }
+
+    throw lastError || new Error("Free image generation failed");
+};
+
+/** Gemini image models — the only providers that can take a reference frame. */
+const generateGeminiImage = async (prompt: string, referenceImageBase64?: string, signal?: AbortSignal): Promise<string> => {
+    return withModelFallbacks(MODEL_CONFIG.image.gemini, async (model) => {
+        const ai = getAiClient();
+        const parts: any[] = [];
+
+        if (referenceImageBase64) {
+            parts.push({ inlineData: { data: referenceImageBase64, mimeType: getMimeType(referenceImageBase64) } });
+            parts.push({ text: "Use this previous scene as a stylistic and character reference. Maintain character design, but change the action and background as described in the new prompt. CRITICAL: Do not zoom in. Maintain the same wide camera angle and distance as the reference image." });
+        }
+        parts.push({ text: prompt });
+
+        // Handle specific config for Pro model vs Flash
+        const config: any = {
+            imageConfig: { aspectRatio: '16:9' }
+        };
+        if (model.includes('pro') || model.includes('3.1')) {
+            config.imageConfig.imageSize = '2K';
+        }
+
+        const response = await ai.models.generateContent({ model, contents: { parts }, config });
+
+        TokenTracker.addUsage(response.usageMetadata);
+
+        const candidate = response.candidates?.[0];
+        if (candidate?.finishReason === 'SAFETY') throw new Error("Safety block");
+
+        for (const part of candidate?.content?.parts || []) {
+            if (part.inlineData?.data) return part.inlineData.data;
+        }
+        throw new Error("No image data in response");
+    }, "Gemini Image", signal);
+};
+
+const generateImagenImage = async (prompt: string, _signal?: AbortSignal): Promise<string> => {
+    const ai = getAiClient();
+    const response = await ai.models.generateImages({
+        model: 'imagen-3.0-generate-002',
+        prompt,
+        config: {
+            numberOfImages: 1,
+            outputMimeType: 'image/jpeg',
+            aspectRatio: '16:9',
+        },
+    });
+    const base64Image = response.generatedImages?.[0]?.image?.imageBytes;
+    if (!base64Image) throw new Error("No image data in Imagen response");
+    return base64Image;
+};
+
+const isSafetyError = (error: any): boolean =>
+    error?.message === "Safety block" ||
+    error?.status === 400 ||
+    !!error?.message?.toLowerCase().includes('safety');
+
+/**
+ * Generates a consistent scene image, trying each provider in turn.
+ * Free-first by default (see IMAGE_PROVIDER); never throws for a recoverable
+ * reason without having tried every provider.
+ */
+export const generateSceneImage = async (
+    prompt: string,
+    age: number,
+    previousImageBase64?: string,
+    isRetry = false,
+    signal?: AbortSignal,
+    options: SceneImageOptions = {}
+): Promise<string> => {
     if (signal?.aborted) throw new Error("Aborted");
-    
-    const cacheKey = `image_${prompt}_${age}_${previousImageBase64 ? 'with_ref' : 'no_ref'}`;
+
+    const seed = options.seed ?? hashToSeed(prompt);
+    const cacheKey = `image_${prompt}_${age}_${seed}_${options.characterBible || ''}_${previousImageBase64 ? 'with_ref' : 'no_ref'}`;
     if (!isRetry && AssetCache.has(cacheKey)) {
         console.log(`[Cache Hit] Scene Image`);
         return AssetCache.get(cacheKey);
     }
 
-    const styleSuffix = age < 8 
+    const styleSuffix = age < 8
         ? "cartoon style, 3d render, cute, bright colors, chunky shapes, kid friendly, G-rated, wide shot, full scene composition"
         : "cartoon style, cinematic, detailed textures, vibrant, dynamic composition, G-rated, wide shot, full scene composition";
 
-    const finalPrompt = isRetry 
-        ? `A cute safe cartoon scene: ${prompt}` 
-        : `Create a scene: ${prompt}. Style: ${styleSuffix}. CRITICAL: Ensure the characters are fully visible in their environment. ALWAYS use a wide shot or medium shot. DO NOT generate extreme close-ups or cropped faces. Maintain consistent character distance.`;
+    // The free provider can't see the previous frame, so the character sheet is
+    // what keeps the cast recognisable from scene to scene.
+    const characterLine = options.characterBible
+        ? `Characters, drawn identically in every scene: ${options.characterBible}. `
+        : '';
 
-    try {
-        // 1. Try Gemini Family (supports Multimodal/Consistency)
-        return await withModelFallbacks(MODEL_CONFIG.image.gemini, async (model) => {
-             const ai = getAiClient();
-             const parts: any[] = [];
-             
-             // Add reference image if available
-             if (previousImageBase64 && !isRetry) {
-                 parts.push({ inlineData: { data: previousImageBase64, mimeType: 'image/png' } });
-                 parts.push({ text: "Use this previous scene as a stylistic and character reference. Maintain character design, but change the action and background as described in the new prompt. CRITICAL: Do not zoom in. Maintain the same wide camera angle and distance as the reference image." });
-             }
-             parts.push({ text: finalPrompt });
+    const finalPrompt = isRetry
+        ? `A cute safe cartoon scene: ${prompt}. Style: ${styleSuffix}`
+        : `${characterLine}Create a scene: ${prompt}. Style: ${styleSuffix}. CRITICAL: Ensure the characters are fully visible in their environment. ALWAYS use a wide shot or medium shot. DO NOT generate extreme close-ups or cropped faces. Maintain consistent character distance.`;
 
-             // Handle specific config for Pro model vs Flash
-             const config: any = {
-                 imageConfig: { aspectRatio: '16:9' }
-             };
-             if (model.includes('pro') || model.includes('3.1')) {
-                 config.imageConfig.imageSize = '2K';
-             }
+    const providers: Array<[string, () => Promise<string>]> = [
+        ['Free Image', () => generateFreeImage(finalPrompt, seed, signal)],
+        ['Gemini Image', () => generateGeminiImage(finalPrompt, isRetry ? undefined : previousImageBase64, signal)],
+        ['Imagen', () => generateImagenImage(finalPrompt, signal)],
+    ];
+    if (IMAGE_PROVIDER === 'gemini') providers.push(providers.shift()!);
 
-             const response = await ai.models.generateContent({
-                 model,
-                 contents: { parts },
-                 config
-             });
+    let lastError: any;
+    let sawSafetyBlock = false;
 
-             TokenTracker.addUsage(response.usageMetadata);
-
-             const candidate = response.candidates?.[0];
-             if (candidate?.finishReason === 'SAFETY') throw new Error("Safety block");
-
-             const resultParts = candidate?.content?.parts;
-             if (resultParts) {
-                 for (const part of resultParts) {
-                     if (part.inlineData) {
-                         const base64Image = part.inlineData.data;
-                         if (!isRetry) AssetCache.set(cacheKey, base64Image);
-                         return base64Image;
-                     }
-                 }
-             }
-             throw new Error("No image data in response");
-        }, "Gemini Image", signal);
-
-    } catch (geminiError: any) {
-        if (signal?.aborted || geminiError.message === "Aborted" || geminiError.name === "AbortError") throw geminiError;
-        
-        const isSafetyOrContentError = geminiError.message === "Safety block" || 
-                                       geminiError.message?.toLowerCase().includes('safety') ||
-                                       geminiError.status === 400;
-
-        // Fallback to simplified prompt if safety/content issues were the cause
-        if (!isRetry && isSafetyOrContentError) {
-            console.warn("Safety fallback triggered.");
-            return generateSceneImage("A magical happy place", age, undefined, true, signal);
-        }
-        
-        // Fallback to Imagen if Gemini models fail (e.g., 403 Permission Denied)
-        console.warn("Gemini Image failed, falling back to Imagen:", geminiError.message);
+    for (const [label, run] of providers) {
+        if (signal?.aborted) throw new Error("Aborted");
         try {
-            const ai = getAiClient();
-            const response = await ai.models.generateImages({
-                model: 'imagen-3.0-generate-002',
-                prompt: finalPrompt,
-                config: {
-                    numberOfImages: 1,
-                    outputMimeType: 'image/jpeg',
-                    aspectRatio: '16:9',
-                },
-            });
-            const base64Image = response.generatedImages?.[0]?.image?.imageBytes;
-            if (base64Image) {
-                if (!isRetry) AssetCache.set(cacheKey, base64Image);
-                return base64Image;
-            }
-            throw new Error("No image data in Imagen response");
-        } catch (imagenError: any) {
-            console.warn("Imagen failed, falling back to free provider (Pollinations.ai):", imagenError?.message || imagenError);
-            try {
-                const encodedPrompt = encodeURIComponent(finalPrompt);
-                const seed = Math.floor(Math.random() * 1000000);
-                const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1280&height=720&nologo=true&seed=${seed}`;
-                
-                const response = await fetch(url, { signal });
-                if (!response.ok) throw new Error(`Free provider failed: ${response.status}`);
-                
-                const blob = await response.blob();
-                return new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const result = reader.result as string;
-                        if (result && result.includes(',')) {
-                            const base64 = result.split(',')[1];
-                            if (!isRetry) AssetCache.set(cacheKey, base64);
-                            resolve(base64);
-                        } else {
-                            reject(new Error("Invalid data URL from free provider"));
-                        }
-                    };
-                    reader.onerror = () => reject(new Error("FileReader error"));
-                    reader.readAsDataURL(blob);
-                });
-            } catch (freeError: any) {
-                throw new Error(`All image generation methods failed. Last error: ${freeError.message}`);
-            }
+            const image = await run();
+            if (!isRetry) AssetCache.set(cacheKey, image);
+            return image;
+        } catch (error: any) {
+            if (signal?.aborted || error.message === "Aborted" || error.name === "AbortError") throw error;
+            if (isSafetyError(error)) sawSafetyBlock = true;
+            console.warn(`⚠️ [${label}] failed:`, error?.message || error);
+            lastError = error;
         }
     }
+
+    // If the prompt itself was the problem, one sanitized pass is worth the wait.
+    if (!isRetry && sawSafetyBlock) {
+        console.warn("Safety fallback triggered.");
+        return generateSceneImage("A magical happy place", age, undefined, true, signal, options);
+    }
+
+    throw new Error(`All image generation methods failed. Last error: ${lastError?.message || lastError}`);
 };
 
 /**
@@ -531,21 +647,7 @@ const generateHuggingFaceVideo = async (modelId: string, imageBase64: string, pr
         return response.blob();
     };
 
-    const videoBlob = await fetchWithRetry();
-    
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const result = reader.result as string;
-            if (result && result.includes(',')) {
-                resolve(result.split(',')[1]);
-            } else {
-                reject(new Error("Invalid data URL from HF"));
-            }
-        };
-        reader.onerror = () => reject(new Error("FileReader error"));
-        reader.readAsDataURL(videoBlob);
-    });
+    return blobToBase64(await fetchWithRetry());
 };
 
 /**
@@ -617,19 +719,7 @@ export const generateVeoVideo = async (prompt: string, imageBase64: string, sign
         const blob = await fetchResponse.blob();
         if (blob.size === 0) throw new Error("Empty video blob");
 
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const result = reader.result as string;
-                if (result && result.includes(',')) {
-                    resolve(result.split(',')[1]);
-                } else {
-                    reject(new Error("Invalid data URL"));
-                }
-            };
-            reader.onerror = () => reject(new Error("FileReader error"));
-            reader.readAsDataURL(blob);
-        });
+        return blobToBase64(blob);
     }, "Veo Video", signal);
 };
 
