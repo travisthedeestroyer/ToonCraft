@@ -1,8 +1,0 @@
-{
-  "buildCommand": "bash build.sh",
-  "outputDirectory": "freshkidscartoon/dist",
-  "framework": null,
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
-  ]
-}
