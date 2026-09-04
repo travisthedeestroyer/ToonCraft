@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci --prefix MyCartoon/freshkidscartoon",
+  "buildCommand": "npm run build --prefix MyCartoon/freshkidscartoon",
+  "outputDirectory": "MyCartoon/freshkidscartoon/dist",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
